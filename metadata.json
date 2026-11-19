@@ -1,0 +1,6 @@
+{
+  "name": "Vaak / PingTalk",
+  "description": "Zero-lag global disaster-survival mesh communication, family radar, push-to-talk, and emergency compliance platform.",
+  "requestFramePermissions": ["geolocation", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

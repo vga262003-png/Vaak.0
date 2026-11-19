@@ -1,0 +1,522 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-Deny Catch-All Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && (
+        request.auth.token.email_verified == true ||
+        (request.auth.token.firebase.sign_in_provider == 'phone' && request.auth.token.phone_number != null)
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isRoomMember(roomId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/rooms/$(roomId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.memberUids;
+    }
+
+    // --- Standalone Entity Validation Blueprints ---
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'email', 'displayName', 'callSign', 'deviceId',
+          'x25519PublicKey', 'countryIso', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'callSign', 'deviceId',
+          'x25519PublicKey', 'countryIso', 'photoURL', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid is string && data.uid == userId && data.uid == request.auth.uid && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.callSign is string && data.callSign.size() >= 2 && data.callSign.size() <= 40 &&
+        data.deviceId is string && data.deviceId.size() >= 2 && data.deviceId.size() <= 64 &&
+        data.x25519PublicKey is string && data.x25519PublicKey.size() >= 4 && data.x25519PublicKey.size() <= 128 &&
+        data.countryIso is string && data.countryIso.size() >= 2 && data.countryIso.size() <= 8 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidChatMessage(data, userId, messageId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'chatId', 'contactName', 'senderId',
+          'senderName', 'text', 'timestamp', 'delivered', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'chatId', 'contactName', 'senderId',
+          'senderName', 'text', 'timestamp', 'delivered', 'isEmergency', 'createdAt'
+        ]) &&
+        data.id is string && data.id == messageId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.chatId is string && data.chatId.size() >= 1 && data.chatId.size() <= 128 &&
+        data.contactName is string && data.contactName.size() >= 1 && data.contactName.size() <= 100 &&
+        data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 100 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 20 &&
+        data.delivered is bool &&
+        (!('isEmergency' in data) || data.isEmergency is bool) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidWalkieTransmission(data, userId, transmissionId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'sender', 'channel', 'mode',
+          'text', 'timestamp', 'paninianHash', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'sender', 'channel', 'mode',
+          'text', 'durationSec', 'timestamp', 'paninianHash', 'lamportSeq',
+          'codec', 'isAudio', 'isQuickIcon', 'blocked', 'meshStage', 'hopJourney', 'createdAt'
+        ]) &&
+        data.id is string && data.id == transmissionId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.sender is string && data.sender.size() >= 1 && data.sender.size() <= 100 &&
+        data.channel is string && data.channel.size() >= 1 && data.channel.size() <= 100 &&
+        data.mode in ['online', 'mesh', 'sonic'] &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 20 &&
+        data.paninianHash is string && data.paninianHash.size() >= 1 && data.paninianHash.size() <= 64 &&
+        (!('durationSec' in data) || (data.durationSec is number && data.durationSec >= 0 && data.durationSec <= 3600)) &&
+        (!('lamportSeq' in data) || (data.lamportSeq is number && data.lamportSeq >= 0)) &&
+        (!('codec' in data) || (data.codec is string && data.codec.size() <= 32)) &&
+        (!('isAudio' in data) || data.isAudio is bool) &&
+        (!('isQuickIcon' in data) || data.isQuickIcon is bool) &&
+        (!('blocked' in data) || data.blocked is bool) &&
+        (!('meshStage' in data) || (data.meshStage is string && data.meshStage.size() <= 32)) &&
+        (!('hopJourney' in data) || (data.hopJourney is string && data.hopJourney.size() <= 120)) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidContact(data, userId, contactId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'name', 'phone', 'regionIso', 'phonebookLabel',
+          'onVaak', 'status', 'verified', 'connected', 'lastSeen', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'name', 'phone', 'regionIso', 'phonebookLabel',
+          'onVaak', 'status', 'verified', 'connected', 'lastSeen', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == contactId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 40 &&
+        data.regionIso is string && data.regionIso.size() >= 2 && data.regionIso.size() <= 8 &&
+        data.phonebookLabel in ['Family', 'Mobile', 'Work', 'Neighbor'] &&
+        data.onVaak is bool &&
+        data.status in ['Online', '20km Mesh', 'Sonic Wave', 'Offline', 'Not on Vaak'] &&
+        data.verified is bool &&
+        data.connected is bool &&
+        data.lastSeen is string && data.lastSeen.size() >= 1 && data.lastSeen.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidConnectRequest(data, userId, requestId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'contactName', 'phone', 'direction', 'status', 'timestamp', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'contactName', 'phone', 'direction', 'status', 'timestamp', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == requestId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.contactName is string && data.contactName.size() >= 1 && data.contactName.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 60 &&
+        data.direction in ['incoming', 'outgoing', 'invite_sms'] &&
+        data.status in ['pending', 'accepted', 'declined', 'invited'] &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidFamilyMember(data, userId, memberId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'name', 'relation', 'avatar', 'status', 'statusType',
+          'distanceKm', 'bearingDeg', 'lastPingAgo', 'batteryPct', 'channel',
+          'lat', 'lng', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'name', 'relation', 'phone', 'avatar', 'status', 'statusType',
+          'distanceKm', 'bearingDeg', 'lastPingAgo', 'batteryPct', 'channel',
+          'lat', 'lng', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == memberId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.relation is string && data.relation.size() >= 1 && data.relation.size() <= 40 &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+        data.avatar is string && data.avatar.size() <= 512 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 80 &&
+        data.statusType in ['safe', 'transit', 'alert'] &&
+        data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 20000 &&
+        data.bearingDeg is number && data.bearingDeg >= 0 && data.bearingDeg <= 360 &&
+        data.lastPingAgo is string && data.lastPingAgo.size() >= 1 && data.lastPingAgo.size() <= 40 &&
+        data.batteryPct is number && data.batteryPct >= 0 && data.batteryPct <= 100 &&
+        data.channel in ['online', 'mesh', 'sonic'] &&
+        data.lat is number && data.lat >= -90 && data.lat <= 90 &&
+        data.lng is number && data.lng >= -180 && data.lng <= 180 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidGroup(data, userId, groupId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'name', 'phone', 'status', 'isGroup', 'members', 'groupCategory', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'name', 'phone', 'status', 'isGroup', 'members', 'groupCategory', 'createdAt'
+        ]) &&
+        data.id is string && data.id == groupId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 100 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 80 &&
+        data.isGroup is bool && data.isGroup == true &&
+        data.members is list && data.members.size() >= 1 && data.members.size() <= 50 && data.members[0] is string &&
+        data.groupCategory is string && data.groupCategory.size() >= 1 && data.groupCategory.size() <= 40 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidTrackingTag(data, userId, tagId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'beaconCode', 'name', 'targetType', 'dutyCycleSec',
+          'distanceKm', 'bearingDeg', 'batteryEstPct', 'lastPulseAt',
+          'encryptedFootprintHash', 'active', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'beaconCode', 'name', 'targetType', 'dutyCycleSec',
+          'distanceKm', 'bearingDeg', 'batteryEstPct', 'lastPulseAt',
+          'encryptedFootprintHash', 'active', 'createdAt'
+        ]) &&
+        data.id is string && data.id == tagId && data.id.size() <= 128 &&
+        data.ownerUid is string && data.ownerUid == userId && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.beaconCode is string && data.beaconCode.size() >= 3 && data.beaconCode.size() <= 40 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.targetType in ['Child', 'Pet', 'Luggage', 'Car Screen', 'Smartwatch'] &&
+        data.dutyCycleSec in [30, 60, 300] &&
+        data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 20000 &&
+        data.bearingDeg is number && data.bearingDeg >= 0 && data.bearingDeg <= 360 &&
+        data.batteryEstPct is number && data.batteryEstPct >= 0 && data.batteryEstPct <= 100 &&
+        data.lastPulseAt is string && data.lastPulseAt.size() >= 1 && data.lastPulseAt.size() <= 40 &&
+        data.encryptedFootprintHash is string && data.encryptedFootprintHash.size() >= 1 && data.encryptedFootprintHash.size() <= 64 &&
+        data.active is bool &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRoom(data, roomId) {
+      return data.keys().hasAll([
+          'id', 'pin', 'name', 'category', 'ownerUid', 'memberUids',
+          'memberCount', 'activeMode', 'createdAtLabel', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'pin', 'name', 'category', 'ownerUid', 'memberUids',
+          'memberCount', 'activeMode', 'createdAtLabel', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id is string && data.id == roomId && data.id.size() <= 128 &&
+        data.pin is string && data.pin.size() == 6 && data.pin.matches('^[0-9]{6}$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.category in ['Event', 'Outing', 'Friend Group', 'Neighborhood'] &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+        data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 50 && data.memberUids[0] is string &&
+        data.memberCount is number && data.memberCount >= 1 && data.memberCount <= 50 &&
+        data.activeMode in ['online', 'mesh', 'sonic'] &&
+        data.createdAtLabel is string && data.createdAtLabel.size() >= 1 && data.createdAtLabel.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidRoomPinIndex(data, pin) {
+      return data.keys().hasAll(['pin', 'roomId', 'ownerUid', 'createdAt']) &&
+        data.keys().hasOnly(['pin', 'roomId', 'ownerUid', 'createdAt']) &&
+        data.pin is string && data.pin == pin && data.pin.matches('^[0-9]{6}$') &&
+        data.roomId is string && isValidId(data.roomId) &&
+        data.ownerUid is string && data.ownerUid == request.auth.uid && data.ownerUid.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.createdAt == request.time;
+    }
+
+    function isValidRoomMessage(data, roomId, messageId) {
+      return data.keys().hasAll([
+          'id', 'roomId', 'senderUid', 'sender', 'text', 'timestamp', 'paninianCipherPreview', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'roomId', 'senderUid', 'sender', 'text', 'timestamp',
+          'paninianCipherPreview', 'lamportSeq', 'meshStage', 'hopJourney', 'createdAt'
+        ]) &&
+        data.id is string && data.id == messageId && data.id.size() <= 128 &&
+        data.roomId is string && data.roomId == roomId && data.roomId.size() <= 128 &&
+        data.senderUid is string && data.senderUid == request.auth.uid && data.senderUid.size() <= 128 &&
+        data.sender is string && data.sender.size() >= 1 && data.sender.size() <= 100 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 20 &&
+        data.paninianCipherPreview is string && data.paninianCipherPreview.size() >= 1 && data.paninianCipherPreview.size() <= 64 &&
+        (!('lamportSeq' in data) || (data.lamportSeq is number && data.lamportSeq >= 0)) &&
+        (!('meshStage' in data) || (data.meshStage is string && data.meshStage.size() <= 32)) &&
+        (!('hopJourney' in data) || (data.hopJourney is string && data.hopJourney.size() <= 120)) &&
+        data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // Boot connection test probe
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // Owner-Only User Profile (strict PII isolation)
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time;
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'email', 'displayName', 'callSign', 'deviceId', 'x25519PublicKey', 'countryIso', 'photoURL', 'updatedAt'
+        ]);
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // 1-on-1 & Group Chat Messages
+      match /messages/{messageId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(messageId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(messageId) &&
+          isValidChatMessage(incoming(), userId, messageId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(messageId) &&
+          isValidChatMessage(incoming(), userId, messageId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['delivered']);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(messageId);
+      }
+
+      // Walkie-Talkie & Priority Mesh Transmissions
+      match /walkieTransmissions/{transmissionId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(transmissionId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(transmissionId) &&
+          isValidWalkieTransmission(incoming(), userId, transmissionId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(transmissionId) &&
+          isValidWalkieTransmission(incoming(), userId, transmissionId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['meshStage', 'hopJourney']);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(transmissionId);
+      }
+
+      // Phonebook & Connected Vaak Contacts
+      match /contacts/{contactId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(contactId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(contactId) &&
+          isValidContact(incoming(), userId, contactId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(contactId) &&
+          isValidContact(incoming(), userId, contactId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'phone', 'regionIso', 'phonebookLabel', 'onVaak', 'status', 'verified', 'connected', 'lastSeen', 'updatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(contactId);
+      }
+
+      // Connect Requests & Invite Logs
+      match /connectRequests/{requestId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(requestId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(requestId) &&
+          isValidConnectRequest(incoming(), userId, requestId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(requestId) &&
+          isValidConnectRequest(incoming(), userId, requestId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(requestId);
+      }
+
+      // Pinned Family Members
+      match /family/{memberId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(memberId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(memberId) &&
+          isValidFamilyMember(incoming(), userId, memberId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(memberId) &&
+          isValidFamilyMember(incoming(), userId, memberId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastPingAgo', 'batteryPct', 'status', 'statusType', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'relation', 'phone', 'distanceKm', 'bearingDeg', 'channel', 'lat', 'lng', 'updatedAt'])
+          );
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(memberId);
+      }
+
+      // Broadcast Groups
+      match /groups/{groupId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(groupId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(groupId) &&
+          isValidGroup(incoming(), userId, groupId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if false;
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(groupId);
+      }
+
+      // Radio Tracking Host Beacons
+      match /trackingTags/{tagId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(tagId);
+        allow list: if isOwner(userId) && existing().ownerUid == request.auth.uid;
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(tagId) &&
+          isValidTrackingTag(incoming(), userId, tagId) &&
+          incoming().createdAt == request.time &&
+          parentUserExists(userId);
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(tagId) &&
+          isValidTrackingTag(incoming(), userId, tagId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['active']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['distanceKm', 'bearingDeg', 'lastPulseAt', 'encryptedFootprintHash'])
+          );
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(tagId);
+      }
+    }
+
+    // Shared 6-Digit PIN Rooms
+    match /rooms/{roomId} {
+      allow get: if isSignedIn() && isValidId(roomId) && request.auth.uid in existing().memberUids;
+      allow list: if isSignedIn() && request.auth.uid in resource.data.memberUids;
+      allow create: if isSignedIn() &&
+        isValidId(roomId) &&
+        isValidRoom(incoming(), roomId) &&
+        incoming().ownerUid == request.auth.uid &&
+        request.auth.uid in incoming().memberUids &&
+        incoming().createdAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(roomId) &&
+        isValidRoom(incoming(), roomId) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().pin == existing().pin &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (
+            !(request.auth.uid in existing().memberUids) &&
+            request.auth.uid in incoming().memberUids &&
+            incoming().memberUids.hasAll(existing().memberUids) &&
+            incoming().memberUids.size() == existing().memberUids.size() + 1 &&
+            incoming().memberCount == existing().memberCount + 1 &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'memberCount', 'updatedAt'])
+          ) ||
+          (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'activeMode', 'updatedAt'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(roomId) && existing().ownerUid == request.auth.uid;
+
+      // Room Messages (Master Gate: Parent room membership)
+      match /messages/{messageId} {
+        allow get: if isValidId(roomId) && isValidId(messageId) && isRoomMember(roomId);
+        allow list: if isValidId(roomId) && isRoomMember(roomId);
+        allow create: if isSignedIn() &&
+          isValidId(roomId) &&
+          isValidId(messageId) &&
+          isValidRoomMessage(incoming(), roomId, messageId) &&
+          incoming().createdAt == request.time &&
+          isRoomMember(roomId);
+        allow update: if false;
+        allow delete: if isSignedIn() && isValidId(roomId) && isValidId(messageId) && existing().senderUid == request.auth.uid;
+      }
+    }
+
+    // 6-Digit PIN Lookup Index (single-document get only; list forbidden)
+    match /room_pins/{pin} {
+      allow get: if isSignedIn() && pin.matches('^[0-9]{6}$');
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        pin.matches('^[0-9]{6}$') &&
+        isValidRoomPinIndex(incoming(), pin) &&
+        (
+          exists(/databases/$(database)/documents/rooms/$(incoming().roomId)) ||
+          existsAfter(/databases/$(database)/documents/rooms/$(incoming().roomId))
+        );
+      allow update: if false;
+      allow delete: if isSignedIn() && pin.matches('^[0-9]{6}$') && existing().ownerUid == request.auth.uid;
+    }
+  }
+}

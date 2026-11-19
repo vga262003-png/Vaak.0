@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="40" height="40" rx="8" fill="#0F172A" />
+  <defs>
+    <linearGradient id="vaakShieldGrad" x1="6" y1="4" x2="34" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#1D4ED8" />
+    </linearGradient>
+    <linearGradient id="vaakCoreGrad" x1="12" y1="10" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="100%" stop-color="#60A5FA" />
+    </linearGradient>
+  </defs>
+  <path d="M20 3.2L6.5 8.6V18.8C6.5 27.3 12.25 34.7 20 37.2C27.75 34.7 33.5 27.3 33.5 18.8V8.6L20 3.2Z" fill="#0F172A" stroke="url(#vaakShieldGrad)" stroke-width="2.2" />
+  <path d="M13.5 14.5C11.6 16.9 11.6 21.1 13.5 23.5" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" />
+  <path d="M26.5 14.5C28.4 16.9 28.4 21.1 26.5 23.5" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" />
+  <path d="M16.5 16.2L20 25.4L23.5 16.2" stroke="url(#vaakCoreGrad)" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="20" cy="12.2" r="1.8" fill="#38BDF8" />
+</svg>

@@ -1,0 +1,263 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Vaak user profile and hardware identity binding.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "callSign": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "deviceId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "x25519PublicKey": { "type": "string", "minLength": 4, "maxLength": 128 },
+        "countryIso": { "type": "string", "minLength": 2, "maxLength": 8 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "callSign", "deviceId", "x25519PublicKey", "countryIso", "createdAt", "updatedAt"]
+    },
+    "ChatMessageRecord": {
+      "title": "ChatMessageRecord",
+      "description": "Real 1-on-1 or group chat message stored in Firestore.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "contactName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "timestamp": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "delivered": { "type": "boolean" },
+        "isEmergency": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "chatId", "contactName", "senderId", "senderName", "text", "timestamp", "delivered", "createdAt"]
+    },
+    "WalkieTransmissionRecord": {
+      "title": "WalkieTransmissionRecord",
+      "description": "Real Walkie-Talkie or Priority Mesh transmission saved in Firestore.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sender": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "channel": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "mode": { "type": "string", "enum": ["online", "mesh", "sonic"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "durationSec": { "type": "number" },
+        "timestamp": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "paninianHash": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "lamportSeq": { "type": "number" },
+        "codec": { "type": "string", "maxLength": 32 },
+        "isAudio": { "type": "boolean" },
+        "isQuickIcon": { "type": "boolean" },
+        "blocked": { "type": "boolean" },
+        "meshStage": { "type": "string", "maxLength": 32 },
+        "hopJourney": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "sender", "channel", "mode", "text", "timestamp", "paninianHash", "createdAt"]
+    },
+    "ContactRecord": {
+      "title": "ContactRecord",
+      "description": "User phonebook or connected Vaak contact.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "phone": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "regionIso": { "type": "string", "minLength": 2, "maxLength": 8 },
+        "phonebookLabel": { "type": "string", "enum": ["Family", "Mobile", "Work", "Neighbor"] },
+        "onVaak": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["Online", "20km Mesh", "Sonic Wave", "Offline", "Not on Vaak"] },
+        "verified": { "type": "boolean" },
+        "connected": { "type": "boolean" },
+        "lastSeen": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "name", "phone", "regionIso", "phonebookLabel", "onVaak", "status", "verified", "connected", "lastSeen", "createdAt", "updatedAt"]
+    },
+    "FamilyMemberRecord": {
+      "title": "FamilyMemberRecord",
+      "description": "User-pinned family member for radar and emergency alerts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "relation": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "avatar": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "statusType": { "type": "string", "enum": ["safe", "transit", "alert"] },
+        "distanceKm": { "type": "number" },
+        "bearingDeg": { "type": "number" },
+        "lastPingAgo": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "batteryPct": { "type": "number" },
+        "channel": { "type": "string", "enum": ["online", "mesh", "sonic"] },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "name", "relation", "avatar", "status", "statusType", "distanceKm", "bearingDeg", "lastPingAgo", "batteryPct", "channel", "lat", "lng", "createdAt", "updatedAt"]
+    },
+    "GroupRecord": {
+      "title": "GroupRecord",
+      "description": "User-created Family or Team broadcast group.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "phone": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "isGroup": { "type": "boolean" },
+        "members": { "type": "array" },
+        "groupCategory": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "name", "phone", "status", "isGroup", "members", "groupCategory", "createdAt"]
+    },
+    "RoomRecord": {
+      "title": "RoomRecord",
+      "description": "6-digit PIN encrypted room shared across authorized members.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "pin": { "type": "string", "pattern": "^[0-9]{6}$", "minLength": 6, "maxLength": 6 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "category": { "type": "string", "enum": ["Event", "Outing", "Friend Group", "Neighborhood"] },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "memberCount": { "type": "number" },
+        "activeMode": { "type": "string", "enum": ["online", "mesh", "sonic"] },
+        "createdAtLabel": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "pin", "name", "category", "ownerUid", "memberUids", "memberCount", "activeMode", "createdAtLabel", "createdAt", "updatedAt"]
+    },
+    "RoomPinIndex": {
+      "title": "RoomPinIndex",
+      "description": "Lookup index mapping a 6-digit PIN to its roomId.",
+      "type": "object",
+      "properties": {
+        "pin": { "type": "string", "pattern": "^[0-9]{6}$", "minLength": 6, "maxLength": 6 },
+        "roomId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pin", "roomId", "ownerUid", "createdAt"]
+    },
+    "RoomMessageRecord": {
+      "title": "RoomMessageRecord",
+      "description": "Encrypted message posted inside a PIN room.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "roomId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sender": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "timestamp": { "type": "string", "minLength": 1, "maxLength": 20 },
+        "paninianCipherPreview": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "lamportSeq": { "type": "number" },
+        "meshStage": { "type": "string", "maxLength": 32 },
+        "hopJourney": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "roomId", "senderUid", "sender", "text", "timestamp", "paninianCipherPreview", "createdAt"]
+    },
+    "TrackingTagRecord": {
+      "title": "TrackingTagRecord",
+      "description": "User-hosted radio tracking beacon tag.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "beaconCode": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "targetType": { "type": "string", "enum": ["Child", "Pet", "Luggage", "Car Screen", "Smartwatch"] },
+        "dutyCycleSec": { "type": "number" },
+        "distanceKm": { "type": "number" },
+        "bearingDeg": { "type": "number" },
+        "batteryEstPct": { "type": "number" },
+        "lastPulseAt": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "encryptedFootprintHash": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "beaconCode", "name", "targetType", "dutyCycleSec", "distanceKm", "bearingDeg", "batteryEstPct", "lastPulseAt", "encryptedFootprintHash", "active", "createdAt"]
+    },
+    "ConnectRequestRecord": {
+      "title": "ConnectRequestRecord",
+      "description": "Persisted connect request or invite log belonging to an authenticated user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "contactName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "phone": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "direction": { "type": "string", "enum": ["incoming", "outgoing", "invite_sms"] },
+        "status": { "type": "string", "enum": ["pending", "accepted", "declined", "invited"] },
+        "timestamp": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "contactName", "phone", "direction", "status", "timestamp", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated user profile (owner-only PII access)."
+    },
+    "/users/{userId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessageRecord" },
+      "description": "Real 1-on-1 and group chat messages belonging to the authenticated user."
+    },
+    "/users/{userId}/walkieTransmissions/{transmissionId}": {
+      "schema": { "$ref": "#/entities/WalkieTransmissionRecord" },
+      "description": "Real walkie-talkie and SOS mesh transmissions belonging to the authenticated user."
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/ContactRecord" },
+      "description": "User-saved contacts."
+    },
+    "/users/{userId}/connectRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/ConnectRequestRecord" },
+      "description": "Persisted user connect requests and invite logs."
+    },
+    "/users/{userId}/family/{memberId}": {
+      "schema": { "$ref": "#/entities/FamilyMemberRecord" },
+      "description": "User-pinned family members."
+    },
+    "/users/{userId}/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/GroupRecord" },
+      "description": "User-created broadcast groups."
+    },
+    "/users/{userId}/trackingTags/{tagId}": {
+      "schema": { "$ref": "#/entities/TrackingTagRecord" },
+      "description": "User-created radio tracking beacon tags."
+    },
+    "/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/RoomRecord" },
+      "description": "Shared 6-digit PIN encrypted rooms."
+    },
+    "/room_pins/{pin}": {
+      "schema": { "$ref": "#/entities/RoomPinIndex" },
+      "description": "6-digit PIN lookup index for joining a room."
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/RoomMessageRecord" },
+      "description": "Real messages inside a shared PIN room."
+    }
+  }
+}
