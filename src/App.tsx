@@ -15,6 +15,7 @@ import {
   MedicalIdProfile,
   MeshDeliveryStage,
   NotificationItem,
+  RadarNode,
   RadioTrackingFootprint,
   RadioTrackingTag,
   TransportMode,
@@ -90,17 +91,32 @@ import {
   loadOfflineTileCacheMeta,
 } from './utils/offlineTileCache';
 import {
+  computeBearingDeg,
+  computeDistanceKm,
+  computeFallbackSector,
   formatLiveLocationSummary,
   getCachedGps,
   requestLiveGps,
 } from './utils/geolocation';
 import {
   broadcastLocalMeshPacket,
+  broadcastLocalRadarBeacon,
+  broadcastLocalRadarRequest,
   enqueueDtnOutboxItem,
+  LocalRadarBeacon,
+  LocalRadarRequestPacket,
   loadDtnOutbox,
   saveDtnOutbox,
   subscribeLocalMesh,
+  subscribeLocalRadarBeacons,
+  subscribeLocalRadarRequests,
 } from './utils/offlineMeshTransport';
+import { loadFounderFeatureFlags } from './utils/sixLayerSecurityVault';
+import {
+  loadOfflineDataSnapshot,
+  saveBaseVerifiedVault,
+  saveOfflineDataSnapshot,
+} from './utils/authVault';
 import { OnboardingGate } from './components/OnboardingGate';
 import { AuthGate, USER_PREFS_STORAGE_KEY } from './components/AuthGate';
 import { DuressDecoyScreen } from './components/DuressDecoyScreen';
@@ -184,24 +200,28 @@ export default function App() {
   });
 
   // Sole Founder Ownership & Master Root Account State (no master secrets in client bundle)
-  const [founderControl, setFounderControl] = useState<FounderRootControlState>({
-    founderAccountId: 'FOUNDER-ROOT-001',
-    founderEmail: 'vga262003@gmail.com',
-    enableGlobalWorldMapAndHubs: false, // Dormant Enterprise Flag
-    enableExtendedHardwareLoRaMesh: false, // Dormant Enterprise Flag
-    enableGovVaultAndWhiteLabel: false, // Dormant Enterprise Flag
-    isSubscriptionActive: false, // Dormant White-Label Partner/Subscription engine locked false
-    whiteLabelPartnerName: 'Dormant Partner Slot',
-    enforceStrictThreatSuspension: true,
-    enforceZeroTraceRamCache: true,
-    adminAlerts: [
-      {
-        id: 'adm-1',
-        message: '100% platform ownership sealed under FOUNDER-ROOT-001. All 4 enterprise flags dormant (false).',
-        timestamp: '14:00 UTC',
-        level: 'info',
-      },
-    ],
+  const [founderControl, setFounderControl] = useState<FounderRootControlState>(() => {
+    const savedFlags = loadFounderFeatureFlags();
+    return {
+      founderAccountId: 'FOUNDER-ROOT-001',
+      founderEmail: 'vga262003@gmail.com',
+      enableGlobalWorldMapAndHubs: savedFlags.enableGlobalWorldMapAndHubs,
+      enableExtendedHardwareLoRaMesh: savedFlags.enableExtendedHardwareLoRaMesh,
+      enableGovVaultAndWhiteLabel: savedFlags.enableGovVaultAndWhiteLabel,
+      isSubscriptionActive: savedFlags.isSubscriptionActive,
+      enablePhoneOtpAuth: savedFlags.enablePhoneOtpAuth,
+      whiteLabelPartnerName: 'Dormant Partner Slot',
+      enforceStrictThreatSuspension: true,
+      enforceZeroTraceRamCache: true,
+      adminAlerts: [
+        {
+          id: 'adm-1',
+          message: '100% platform ownership sealed under FOUNDER-ROOT-001. Optional Phone SMS OTP paused (₹0 cost).',
+          timestamp: '14:00 UTC',
+          level: 'info',
+        },
+      ],
+    };
   });
 
   const [paninianEpoch, setPaninianEpoch] = useState<number>(5);
@@ -237,6 +257,21 @@ export default function App() {
   const [sosActive, setSosActive] = useState<boolean>(false);
   const [trackingTags, setTrackingTags] = useState<RadioTrackingTag[]>([]);
   const [trackingFootprints, setTrackingFootprints] = useState<RadioTrackingFootprint[]>([]);
+  const [nearbyServerPeers, setNearbyServerPeers] = useState<RadarNode[]>([]);
+  const [localBeaconsMap, setLocalBeaconsMap] = useState<Record<string, LocalRadarBeacon>>({});
+  const [radarPeerRequests, setRadarPeerRequests] = useState<
+    {
+      id: string;
+      fromNodeId: string;
+      fromCallSign: string;
+      toNodeId: string;
+      toCallSign: string;
+      status: 'pending' | 'accepted' | 'declined';
+      note?: string;
+    }[]
+  >([]);
+  const [radarScanning, setRadarScanning] = useState<boolean>(false);
+  const notifiedRadarReqIdsRef = useRef<Set<string>>(new Set());
 
   const appendFounderAlert = useCallback((message: string, level: 'info' | 'critical' = 'info') => {
     const timestamp = new Date().toTimeString().slice(0, 5) + ' UTC';
@@ -481,26 +516,26 @@ export default function App() {
           }
         }
 
-        setSession((prev) =>
-          prev?.isDuressMode
-            ? prev
-            : {
-                uid: firebaseUser.uid,
-                email: resolvedEmail,
-                displayName: firebaseUser.displayName || callSign,
-                photoURL: firebaseUser.photoURL || undefined,
-                identifier: resolvedIdentifier,
-                callSign,
-                deviceId,
-                x25519PublicKey,
-                country,
-                authMethod: resolvedAuthMethod,
-                isDuressMode: false,
-                isSuspended: false,
-                strikeCount: 0,
-                duressPin: '',
-              }
-        );
+        const builtSession: UserSession = {
+          uid: firebaseUser.uid,
+          email: resolvedEmail,
+          loginId: firebaseUser.displayName || callSign.toLowerCase(),
+          displayName: firebaseUser.displayName || callSign,
+          photoURL: firebaseUser.photoURL || undefined,
+          identifier: resolvedIdentifier,
+          callSign,
+          deviceId,
+          x25519PublicKey,
+          country,
+          authMethod: resolvedAuthMethod,
+          isOfflineUnlocked: false,
+          isDuressMode: false,
+          isSuspended: false,
+          strikeCount: 0,
+          duressPin: '',
+        };
+        saveBaseVerifiedVault(builtSession, builtSession.loginId);
+        setSession((prev) => (prev?.isDuressMode ? prev : builtSession));
         setProfileReadyUid(firebaseUser.uid);
         setStage((prev) => (prev === 'gov-vault' ? 'gov-vault' : 'dashboard'));
         void handleVerifyFirebaseConnection();
@@ -508,7 +543,7 @@ export default function App() {
       } else {
         setProfileReadyUid(null);
         setSession((prev) => {
-          if (prev?.isDuressMode) return prev;
+          if (prev?.isDuressMode || prev?.isOfflineUnlocked) return prev;
           return null;
         });
       }
@@ -517,9 +552,16 @@ export default function App() {
     return () => unsubscribe();
   }, [handleVerifyFirebaseConnection, reportFirestoreError]);
 
-  // Real-time Firestore Subscriptions for Authenticated User (waits for profileReadyUid)
+  // Real-time Firestore Subscriptions for Authenticated User (waits for profileReadyUid & active Firebase session)
   useEffect(() => {
-    if (!session?.uid || session.isDuressMode || profileReadyUid !== session.uid) return;
+    if (
+      !session?.uid ||
+      session.isDuressMode ||
+      (session.isOfflineUnlocked && !auth.currentUser) ||
+      profileReadyUid !== session.uid
+    ) {
+      return;
+    }
     const uid = session.uid;
     const onSubError = (label: string) => (err: Error) => reportFirestoreError(label, err);
 
@@ -581,7 +623,13 @@ export default function App() {
     });
 
     const flushDtnOutbox = async () => {
-      if (!session.uid || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+      if (
+        !session.uid ||
+        !auth.currentUser ||
+        (typeof navigator !== 'undefined' && !navigator.onLine)
+      ) {
+        return;
+      }
       const pending = loadDtnOutbox();
       if (pending.length === 0) return;
 
@@ -621,6 +669,290 @@ export default function App() {
       window.removeEventListener('online', flushDtnOutbox);
     };
   }, [session?.uid, session?.deviceId, session?.isDuressMode, raspPolicy, paninianKey.keyId, appendNotification]);
+
+  // Real-time Nearby Radar Presence & Peer Connect Request Sync (Online server + Local BroadcastChannel)
+  const announceAndScanRadar = useCallback(
+    async (withFreshGps = false) => {
+      if (!session || session.isDuressMode) return;
+      if (withFreshGps) {
+        await requestLiveGps(2000);
+      }
+      const gps = getCachedGps();
+      const validGps = gps && gps.source === 'gps' ? gps : null;
+      const nowMs = Date.now();
+
+      broadcastLocalRadarBeacon({
+        nodeId: session.deviceId,
+        callSign: session.callSign,
+        mode,
+        lat: validGps ? validGps.lat : null,
+        lng: validGps ? validGps.lng : null,
+        statusText: mode === 'online' ? 'Online · Vaak Nearby' : 'Mesh · Vaak Nearby',
+        updatedAtMs: nowMs,
+      });
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        return;
+      }
+
+      setRadarScanning(true);
+      try {
+        await fetch('/api/radar/announce', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nodeId: session.deviceId,
+            callSign: session.callSign,
+            mode,
+            lat: validGps ? validGps.lat : undefined,
+            lng: validGps ? validGps.lng : undefined,
+            statusText: mode === 'online' ? 'Online · Vaak Nearby' : 'Mesh · Vaak Nearby',
+          }),
+        });
+
+        const params = new URLSearchParams({
+          selfId: session.deviceId,
+          maxKm: '20',
+        });
+        if (validGps) {
+          params.set('lat', String(validGps.lat));
+          params.set('lng', String(validGps.lng));
+        }
+
+        const [nearbyRes, reqRes] = await Promise.all([
+          fetch(`/api/radar/nearby?${params.toString()}`),
+          fetch(`/api/radar/requests?nodeId=${encodeURIComponent(session.deviceId)}`),
+        ]);
+
+        if (nearbyRes.ok) {
+          const data = (await nearbyRes.json()) as {
+            peers?: {
+              nodeId: string;
+              callSign: string;
+              mode: TransportMode;
+              distanceKm: number;
+              bearingDeg: number;
+              signalStrength: number;
+              lastSeenSecAgo: number;
+              statusText: string;
+              gpsExact: boolean;
+            }[];
+          };
+          if (Array.isArray(data.peers)) {
+            setNearbyServerPeers(
+              data.peers.map((p) => ({
+                id: `peer-${p.nodeId}`,
+                nodeId: p.nodeId,
+                label: p.callSign,
+                callSign: p.callSign,
+                kind: 'peer',
+                mode: p.mode,
+                distanceKm: p.distanceKm,
+                bearingDeg: p.bearingDeg,
+                signalStrength: p.signalStrength,
+                lastSeenSecAgo: p.lastSeenSecAgo,
+                statusText: p.statusText,
+                gpsExact: p.gpsExact,
+              }))
+            );
+          }
+        }
+
+        if (reqRes.ok) {
+          const reqData = (await reqRes.json()) as {
+            incoming?: {
+              id: string;
+              fromNodeId: string;
+              fromCallSign: string;
+              toNodeId: string;
+              toCallSign: string;
+              status: 'pending' | 'accepted' | 'declined';
+              note?: string;
+            }[];
+            outgoing?: {
+              id: string;
+              fromNodeId: string;
+              fromCallSign: string;
+              toNodeId: string;
+              toCallSign: string;
+              status: 'pending' | 'accepted' | 'declined';
+              note?: string;
+            }[];
+          };
+          const combined = [...(reqData.incoming || []), ...(reqData.outgoing || [])];
+          setRadarPeerRequests((prev) => {
+            const merged = new Map<string, (typeof combined)[number]>();
+            prev.forEach((item) => {
+              if (!item.id.startsWith('rreq-') || item.status === 'accepted') {
+                merged.set(item.id, item);
+              }
+            });
+            combined.forEach((item) => {
+              merged.set(item.id, item);
+            });
+            return Array.from(merged.values());
+          });
+
+          (reqData.incoming || []).forEach((inc) => {
+            if (inc.status === 'pending' && !notifiedRadarReqIdsRef.current.has(inc.id)) {
+              notifiedRadarReqIdsRef.current.add(inc.id);
+              audioEngine.playNotificationChime();
+              appendNotification(
+                'Nearby Radar Request',
+                `${inc.fromCallSign} wants to connect with you on Vaak Radar.`,
+                'info'
+              );
+            }
+          });
+
+          (reqData.outgoing || []).forEach((out) => {
+            if (out.status === 'accepted' && !notifiedRadarReqIdsRef.current.has(`acc-${out.id}`)) {
+              notifiedRadarReqIdsRef.current.add(`acc-${out.id}`);
+              audioEngine.playNotificationChime();
+              appendNotification(
+                'Radar Request Accepted',
+                `${out.toCallSign} accepted your request — now connected in Contacts.`,
+                'info'
+              );
+              const alreadySaved = contacts.some(
+                (c) => c.phone === out.toNodeId || c.name === out.toCallSign
+              );
+              if (!alreadySaved) {
+                const newContact: VaakContactUser = {
+                  id: sanitizeDocId(`contact-radar-${out.toNodeId}`),
+                  name: out.toCallSign,
+                  phone: out.toNodeId,
+                  regionIso: session.country.iso || 'IN',
+                  phonebookLabel: 'Neighbor',
+                  onVaak: true,
+                  status: 'Online',
+                  verified: true,
+                  connected: true,
+                  lastSeen: 'Connected on Radar',
+                };
+                if (session.uid && auth.currentUser) {
+                  void saveContactToFirestore(session.uid, newContact);
+                } else {
+                  setContacts((prev) => [newContact, ...prev]);
+                }
+              }
+            }
+          });
+        }
+      } catch {
+        // Offline or transient network error — keep BroadcastChannel local peers
+      } finally {
+        setRadarScanning(false);
+      }
+    },
+    [session, mode, contacts, appendNotification]
+  );
+
+  useEffect(() => {
+    if (!session || session.isDuressMode) return;
+
+    const unsubBeacons = subscribeLocalRadarBeacons(session.deviceId, (beacon) => {
+      setLocalBeaconsMap((prev) => ({
+        ...prev,
+        [beacon.nodeId]: beacon,
+      }));
+    });
+
+    const unsubReqs = subscribeLocalRadarRequests(
+      session.deviceId,
+      (pkt: LocalRadarRequestPacket) => {
+        setRadarPeerRequests((prev) => {
+          const exists = prev.some((r) => r.id === pkt.requestId);
+          if (exists) {
+            return prev.map((r) => (r.id === pkt.requestId ? { ...r, status: pkt.status } : r));
+          }
+          return [
+            {
+              id: pkt.requestId,
+              fromNodeId: pkt.fromNodeId,
+              fromCallSign: pkt.fromCallSign,
+              toNodeId: pkt.toNodeId,
+              toCallSign: pkt.toCallSign,
+              status: pkt.status,
+            },
+            ...prev,
+          ];
+        });
+
+        if (
+          pkt.kind === 'request' &&
+          pkt.toNodeId === session.deviceId &&
+          pkt.status === 'pending' &&
+          !notifiedRadarReqIdsRef.current.has(pkt.requestId)
+        ) {
+          notifiedRadarReqIdsRef.current.add(pkt.requestId);
+          audioEngine.playNotificationChime();
+          appendNotification(
+            'Nearby Radar Request',
+            `${pkt.fromCallSign} wants to connect with you on Vaak Radar.`,
+            'info'
+          );
+        }
+
+        if (
+          pkt.kind === 'response' &&
+          pkt.fromNodeId === session.deviceId &&
+          pkt.status === 'accepted' &&
+          !notifiedRadarReqIdsRef.current.has(`acc-${pkt.requestId}`)
+        ) {
+          notifiedRadarReqIdsRef.current.add(`acc-${pkt.requestId}`);
+          audioEngine.playNotificationChime();
+          const newContact: VaakContactUser = {
+            id: sanitizeDocId(`contact-radar-${pkt.toNodeId}`),
+            name: pkt.toCallSign,
+            phone: pkt.toNodeId,
+            regionIso: session.country.iso || 'IN',
+            phonebookLabel: 'Neighbor',
+            onVaak: true,
+            status: '20km Mesh',
+            verified: true,
+            connected: true,
+            lastSeen: 'Connected on Radar',
+          };
+          if (session.uid && auth.currentUser) {
+            void saveContactToFirestore(session.uid, newContact);
+          } else {
+            setContacts((prev) =>
+              prev.some((c) => c.phone === pkt.toNodeId) ? prev : [newContact, ...prev]
+            );
+          }
+          appendNotification(
+            'Radar Request Accepted',
+            `${pkt.toCallSign} accepted your connect request!`,
+            'info'
+          );
+        }
+      }
+    );
+
+    void announceAndScanRadar(false);
+    const intervalId = window.setInterval(() => {
+      void announceAndScanRadar(false);
+    }, 6000);
+
+    return () => {
+      unsubBeacons();
+      unsubReqs();
+      clearInterval(intervalId);
+    };
+  }, [session, announceAndScanRadar, appendNotification]);
+
+  // Persist Offline Data Snapshot per UID so PIN / Biometric unlock loads saved family, contacts & rooms offline
+  useEffect(() => {
+    if (!session?.uid || session.isDuressMode || session.isOfflineUnlocked) return;
+    saveOfflineDataSnapshot(session.uid, {
+      family,
+      contacts,
+      transmissions,
+      rooms,
+      chatMessagesMap,
+    });
+  }, [session?.uid, session?.isDuressMode, session?.isOfflineUnlocked, family, contacts, transmissions, rooms, chatMessagesMap]);
 
   const hydratedTransmissions = useMemo(
     () =>
@@ -751,8 +1083,18 @@ export default function App() {
 
   const handleLoginSuccess = (newSession: UserSession) => {
     setSession(newSession);
-    if (newSession.uid) {
+    if (newSession.uid && !newSession.isOfflineUnlocked) {
       setProfileReadyUid(newSession.uid);
+      saveBaseVerifiedVault(newSession, newSession.loginId);
+    } else if (newSession.uid && newSession.isOfflineUnlocked) {
+      const cached = loadOfflineDataSnapshot(newSession.uid);
+      if (cached) {
+        if (cached.family?.length) setFamily(cached.family);
+        if (cached.contacts?.length) setContacts(cached.contacts);
+        if (cached.transmissions?.length) setTransmissions(cached.transmissions);
+        if (cached.rooms?.length) setRooms(cached.rooms);
+        if (cached.chatMessagesMap) setChatMessagesMap(cached.chatMessagesMap);
+      }
     }
     setStage('dashboard');
 
@@ -776,6 +1118,12 @@ export default function App() {
         severity: 'CRITICAL',
         payloadHash: `0x${permuteWithPaninianKey('DURESS', paninianKey, lamportClock).slice(0, 12)}`,
       });
+    } else if (newSession.isOfflineUnlocked) {
+      appendNotification(
+        `Unlocked Offline (${newSession.authMethod === 'biometric' ? 'Biometric' : 'PIN'})`,
+        `Call-Sign ${newSession.callSign} active in Offline Vault mode.`,
+        'info'
+      );
     } else {
       appendNotification(
         'Signed In via Firebase Auth',
@@ -810,8 +1158,8 @@ export default function App() {
       );
     }
     appendNotification(
-      'Family Member Pinned',
-      `${member.name} saved to your Firestore family circle.`,
+      'Added to Chat Circle',
+      `${member.name} (${newMember.relation}) saved to your Firestore circle.`,
       'info'
     );
   };
@@ -886,14 +1234,16 @@ export default function App() {
       });
     }
 
-    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const isOffline =
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      Boolean(session?.isOfflineUnlocked && !auth.currentUser);
     if (isOffline && session && !session.isDuressMode) {
       void enqueueDtnOutboxItem('chat', firestoreChatPayload);
     }
 
-    if (session?.uid) {
+    if (session?.uid && auth.currentUser && !isOffline) {
       sendChatMessageToFirestore(session.uid, firestoreChatPayload).catch((err) => {
-        if (!isOffline) {
+        if (typeof navigator === 'undefined' || navigator.onLine) {
           reportFirestoreError('Send Message Failed', err);
         }
       });
@@ -1169,48 +1519,177 @@ export default function App() {
     );
   };
 
-  const handleRespondConnectRequest = (reqId: string, accept: boolean) => {
-    const target = connectRequests.find((r) => r.id === reqId);
-    const nextStatus: ConnectRequestLog['status'] = accept ? 'accepted' : 'declined';
-    if (session?.uid) {
-      updateConnectRequestStatusInFirestore(session.uid, reqId, nextStatus).catch((err) =>
-        reportFirestoreError('Update Connect Request Failed', err)
+  const handleSendRadarConnectRequest = async (peer: RadarNode) => {
+    if (!session || !peer.nodeId) return;
+    const targetNodeId = peer.nodeId;
+    const targetCallSign = peer.callSign || peer.label;
+    let resolvedReqId = `rreq-local-${Date.now()}`;
+
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      try {
+        const res = await fetch('/api/radar/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromNodeId: session.deviceId,
+            fromCallSign: session.callSign,
+            toNodeId: targetNodeId,
+            toCallSign: targetCallSign,
+            note: 'Nearby Vaak Radar Connect Request',
+          }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { request?: { id: string } };
+          if (data.request?.id) resolvedReqId = data.request.id;
+        }
+      } catch {
+        // Fallback to local BroadcastChannel relay if offline
+      }
+    }
+
+    setRadarPeerRequests((prev) => {
+      if (
+        prev.some(
+          (r) =>
+            r.fromNodeId === session.deviceId &&
+            r.toNodeId === targetNodeId &&
+            r.status !== 'declined'
+        )
+      ) {
+        return prev;
+      }
+      return [
+        {
+          id: resolvedReqId,
+          fromNodeId: session.deviceId,
+          fromCallSign: session.callSign,
+          toNodeId: targetNodeId,
+          toCallSign: targetCallSign,
+          status: 'pending',
+        },
+        ...prev,
+      ];
+    });
+
+    broadcastLocalRadarRequest({
+      kind: 'request',
+      requestId: resolvedReqId,
+      fromNodeId: session.deviceId,
+      fromCallSign: session.callSign,
+      toNodeId: targetNodeId,
+      toCallSign: targetCallSign,
+      status: 'pending',
+      timestampMs: Date.now(),
+    });
+
+    const newReq: ConnectRequestLog = {
+      id: sanitizeDocId(resolvedReqId),
+      contactName: targetCallSign,
+      phone: targetNodeId,
+      direction: 'outgoing',
+      status: 'pending',
+      timestamp: 'Just now',
+      peerNodeId: targetNodeId,
+      callSign: targetCallSign,
+    };
+    if (session.uid && auth.currentUser) {
+      saveConnectRequestToFirestore(session.uid, newReq).catch((err) =>
+        reportFirestoreError('Save Connect Request Failed', err)
       );
     } else {
       setConnectRequests((prev) =>
-        prev.map((r) => (r.id === reqId ? { ...r, status: nextStatus } : r))
+        prev.some((r) => r.id === newReq.id) ? prev : [newReq, ...prev]
       );
     }
-    if (accept && target) {
-      const existingContact = contacts.find((c) => c.phone === target.phone);
+
+    audioEngine.playSonarPing();
+    appendNotification(
+      'Radar Connect Request Sent',
+      `Sent connect request to nearby user ${targetCallSign}.`,
+      'info'
+    );
+  };
+
+  const handleRespondConnectRequest = async (reqId: string, accept: boolean) => {
+    const target = connectRequests.find((r) => r.id === reqId);
+    const radarReq = radarPeerRequests.find((r) => r.id === reqId);
+    const nextStatus: ConnectRequestLog['status'] = accept ? 'accepted' : 'declined';
+
+    if (radarReq && session) {
+      setRadarPeerRequests((prev) =>
+        prev.map((r) => (r.id === reqId ? { ...r, status: nextStatus } : r))
+      );
+
+      broadcastLocalRadarRequest({
+        kind: 'response',
+        requestId: reqId,
+        fromNodeId: radarReq.fromNodeId,
+        fromCallSign: radarReq.fromCallSign,
+        toNodeId: session.deviceId,
+        toCallSign: session.callSign,
+        status: nextStatus,
+        timestampMs: Date.now(),
+      });
+
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        fetch('/api/radar/request/respond', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requestId: reqId,
+            responderNodeId: session.deviceId,
+            accept,
+          }),
+        }).catch(() => {});
+      }
+    }
+
+    if (target) {
+      if (session?.uid && auth.currentUser) {
+        updateConnectRequestStatusInFirestore(session.uid, reqId, nextStatus).catch(() => {});
+      } else {
+        setConnectRequests((prev) =>
+          prev.map((r) => (r.id === reqId ? { ...r, status: nextStatus } : r))
+        );
+      }
+    }
+
+    const peerName = radarReq?.fromCallSign || target?.contactName;
+    const peerPhoneOrNode = radarReq?.fromNodeId || target?.phone;
+
+    if (accept && peerName && peerPhoneOrNode) {
+      const existingContact = contacts.find(
+        (c) => c.phone === peerPhoneOrNode || c.name === peerName
+      );
       const updatedContact: VaakContactUser = existingContact
         ? { ...existingContact, connected: true, onVaak: true, status: 'Online' }
         : {
-            id: sanitizeDocId(`contact-${target.id}`),
-            name: target.contactName,
-            phone: target.phone,
+            id: sanitizeDocId(`contact-${reqId}`),
+            name: peerName,
+            phone: peerPhoneOrNode,
             regionIso: session?.country.iso || 'IN',
             lastSeen: 'Just now',
             onVaak: true,
             status: '20km Mesh',
-            phonebookLabel: 'Mobile',
+            phonebookLabel: radarReq ? 'Neighbor' : 'Mobile',
             connected: true,
             verified: true,
           };
-      if (session?.uid) {
+      if (session?.uid && auth.currentUser) {
         saveContactToFirestore(session.uid, updatedContact).catch((err) =>
           reportFirestoreError('Connect Contact Failed', err)
         );
       } else {
         setContacts((prev) =>
           existingContact
-            ? prev.map((c) => (c.phone === target.phone ? updatedContact : c))
+            ? prev.map((c) => (c.phone === peerPhoneOrNode ? updatedContact : c))
             : [updatedContact, ...prev]
         );
       }
+      audioEngine.playNotificationChime();
       appendNotification(
         'Mutual Contact Connected',
-        `${target.contactName} added to your verified Vaak circle.`,
+        `${peerName} added to your verified Vaak circle.`,
         'info'
       );
     }
@@ -1368,19 +1847,21 @@ export default function App() {
       });
     }
 
-    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const isOffline =
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      Boolean(session.isOfflineUnlocked && !auth.currentUser);
     if (isOffline && !session.isDuressMode) {
       void enqueueDtnOutboxItem('walkie', newTx);
       appendNotification(
         'Queued in Offline DTN Outbox',
-        'Saved locally with SHA-256 checksum; will auto-sync to Firestore when connectivity resumes.',
+        'Saved locally with SHA-256 checksum; will auto-sync to Firestore when connected.',
         'info'
       );
     }
 
-    if (session.uid) {
+    if (session.uid && auth.currentUser && !isOffline) {
       saveWalkieTransmissionToFirestore(session.uid, newTx).catch((err) => {
-        if (!isOffline) {
+        if (typeof navigator === 'undefined' || navigator.onLine) {
           reportFirestoreError('Save Walkie Transmission Failed', err);
         }
       });
@@ -1800,6 +2281,106 @@ export default function App() {
     setTrackingFootprints((prev) => [fp, ...prev.slice(0, 24)]);
   };
 
+  const liveRadarNodes = useMemo(() => {
+    const nowMs = Date.now();
+    const gps = getCachedGps();
+    const hasSelfGps = Boolean(gps && gps.source === 'gps');
+    const mergedByNodeId = new Map<string, RadarNode>();
+
+    nearbyServerPeers.forEach((peer) => {
+      if (peer.nodeId) mergedByNodeId.set(peer.nodeId, peer);
+    });
+
+    Object.values(localBeaconsMap).forEach((b) => {
+      if (nowMs - b.updatedAtMs > 5 * 60 * 1000) return;
+      if (session && b.nodeId === session.deviceId) return;
+      if (mergedByNodeId.has(b.nodeId)) return;
+
+      let distanceKm: number;
+      let bearingDeg: number;
+      let gpsExact = false;
+
+      if (hasSelfGps && gps && b.lat !== null && b.lng !== null) {
+        distanceKm = computeDistanceKm(gps.lat, gps.lng, b.lat, b.lng);
+        bearingDeg = computeBearingDeg(gps.lat, gps.lng, b.lat, b.lng);
+        gpsExact = true;
+      } else {
+        const fb = computeFallbackSector(b.nodeId);
+        distanceKm = fb.distanceKm;
+        bearingDeg = fb.bearingDeg;
+      }
+
+      if (distanceKm <= 20) {
+        mergedByNodeId.set(b.nodeId, {
+          id: `peer-${b.nodeId}`,
+          nodeId: b.nodeId,
+          label: b.callSign,
+          callSign: b.callSign,
+          kind: 'peer',
+          mode: b.mode,
+          distanceKm,
+          bearingDeg,
+          signalStrength: Math.max(25, Math.min(99, Math.round(100 - distanceKm * 3.5))),
+          lastSeenSecAgo: Math.max(0, Math.round((nowMs - b.updatedAtMs) / 1000)),
+          statusText: b.statusText,
+          gpsExact,
+        });
+      }
+    });
+
+    const annotatedPeers: RadarNode[] = Array.from(mergedByNodeId.values()).map((peer) => {
+      const nodeId = peer.nodeId || peer.id;
+      const isConnected = contacts.some(
+        (c) => c.connected && (c.phone === nodeId || c.name === peer.callSign)
+      );
+      const acceptedReq = radarPeerRequests.some(
+        (r) =>
+          r.status === 'accepted' &&
+          ((r.fromNodeId === nodeId && r.toNodeId === session?.deviceId) ||
+            (r.toNodeId === nodeId && r.fromNodeId === session?.deviceId))
+      );
+      const incomingReq = radarPeerRequests.find(
+        (r) => r.status === 'pending' && r.fromNodeId === nodeId && r.toNodeId === session?.deviceId
+      );
+      const outgoingReq = radarPeerRequests.find(
+        (r) => r.status === 'pending' && r.fromNodeId === session?.deviceId && r.toNodeId === nodeId
+      );
+
+      let requestStatus: RadarNode['requestStatus'] = 'none';
+      if (isConnected || acceptedReq) requestStatus = 'accepted';
+      else if (incomingReq) requestStatus = 'incoming_pending';
+      else if (outgoingReq) requestStatus = 'outgoing_pending';
+
+      return {
+        ...peer,
+        requestStatus,
+        incomingReqId: incomingReq?.id,
+      };
+    });
+
+    return [...INITIAL_RADAR_NODES, ...annotatedPeers];
+  }, [nearbyServerPeers, localBeaconsMap, session, contacts, radarPeerRequests]);
+
+  const mergedConnectRequests = useMemo(() => {
+    const seenIds = new Set(connectRequests.map((r) => r.id));
+    const extra: ConnectRequestLog[] = [];
+    radarPeerRequests.forEach((r) => {
+      if (seenIds.has(r.id)) return;
+      const isIncoming = session ? r.toNodeId === session.deviceId : false;
+      extra.push({
+        id: r.id,
+        contactName: isIncoming ? r.fromCallSign : r.toCallSign,
+        phone: isIncoming ? r.fromNodeId : r.toNodeId,
+        direction: isIncoming ? 'incoming' : 'outgoing',
+        status: r.status,
+        timestamp: 'Nearby Radar',
+        peerNodeId: isIncoming ? r.fromNodeId : r.toNodeId,
+        callSign: isIncoming ? r.fromCallSign : r.toCallSign,
+      });
+    });
+    return [...extra, ...connectRequests];
+  }, [connectRequests, radarPeerRequests, session]);
+
   const renderStageContent = () => {
     if (stage === 'gov-vault') {
       return (
@@ -1880,7 +2461,10 @@ export default function App() {
         }
       }}
       family={family}
-      radarNodes={INITIAL_RADAR_NODES}
+      radarNodes={liveRadarNodes}
+      radarScanning={radarScanning}
+      onRefreshRadarScan={() => void announceAndScanRadar(true)}
+      onSendRadarConnectRequest={(peer) => void handleSendRadarConnectRequest(peer)}
       transmissions={hydratedTransmissions}
       rooms={hydratedRooms}
       notifications={notifications}
@@ -1960,13 +2544,13 @@ export default function App() {
       }}
       onSendPriorityMeshBlast={handleSendPriorityMeshBlast}
       contacts={contacts}
-      connectRequests={connectRequests}
+      connectRequests={mergedConnectRequests}
       emergencyDir={emergencyDir}
       syncingEmergencyDir={syncingEmergencyDir}
       onSyncEmergencyDir={() => syncEmergencyDirectory(session.country)}
       onSyncPhonebook={handleSyncPhonebook}
       onSendConnectRequest={handleSendConnectRequest}
-      onRespondConnectRequest={handleRespondConnectRequest}
+      onRespondConnectRequest={(reqId, accept) => void handleRespondConnectRequest(reqId, accept)}
       onSendInviteLink={handleSendInviteLink}
       trackingTags={trackingTags}
       trackingFootprints={trackingFootprints}

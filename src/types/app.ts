@@ -107,6 +107,8 @@ export interface ConnectRequestLog {
   direction: 'incoming' | 'outgoing' | 'invite_sms';
   status: 'pending' | 'accepted' | 'declined' | 'invited';
   timestamp: string;
+  peerNodeId?: string;
+  callSign?: string;
 }
 
 export interface CountryOption {
@@ -138,10 +140,18 @@ export interface FamilyMember {
 export interface RadarNode {
   id: string;
   label: string;
-  kind: 'family' | 'relay' | 'shelter' | 'rescue';
+  kind: 'family' | 'relay' | 'shelter' | 'rescue' | 'peer';
   distanceKm: number;
   bearingDeg: number;
   signalStrength: number;
+  nodeId?: string;
+  callSign?: string;
+  mode?: TransportMode;
+  statusText?: string;
+  lastSeenSecAgo?: number;
+  gpsExact?: boolean;
+  requestStatus?: 'none' | 'outgoing_pending' | 'incoming_pending' | 'accepted';
+  incomingReqId?: string;
 }
 
 export interface WalkieTransmission {
@@ -222,6 +232,7 @@ export interface FounderFeatureFlags {
   enableExtendedHardwareLoRaMesh: boolean; // default false
   enableGovVaultAndWhiteLabel: boolean; // default false
   isSubscriptionActive: boolean; // default false
+  enablePhoneOtpAuth: boolean; // default false (dormant optional SMS OTP until revenue)
 }
 
 export interface FounderRootControlState extends FounderFeatureFlags {
@@ -241,6 +252,7 @@ export interface FounderRootControlState extends FounderFeatureFlags {
 export interface UserSession {
   uid?: string;
   email?: string;
+  loginId?: string;
   displayName?: string;
   photoURL?: string;
   identifier: string;
@@ -248,7 +260,8 @@ export interface UserSession {
   deviceId: string;
   x25519PublicKey: string;
   country: CountryOption;
-  authMethod: 'google' | 'otp' | 'password' | 'duress';
+  authMethod: 'google' | 'otp' | 'password' | 'duress' | 'pin' | 'biometric';
+  isOfflineUnlocked?: boolean;
   isDuressMode: boolean;
   isSuspended: boolean;
   suspendedDeviceId?: string;

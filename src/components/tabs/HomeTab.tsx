@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Battery,
+  Hash,
   MessageSquare,
   Mic,
   Plus,
@@ -12,6 +13,7 @@ import {
 import {
   FamilyMember,
   TransportMode,
+  VaakContactUser,
   VoiceNoteAttachment,
   WalkieTransmission,
 } from '../../types/app';
@@ -22,6 +24,7 @@ import { audioEngine } from '../../utils/audioEngine';
 interface HomeTabProps {
   mode: TransportMode;
   family: FamilyMember[];
+  contacts?: VaakContactUser[];
   transmissions: WalkieTransmission[];
   isSuspended: boolean;
   onPingFamily: (memberId: string) => void;
@@ -35,24 +38,30 @@ interface HomeTabProps {
   onOpenChat: (contact: ChatContactUser) => void;
   onSelectPerson: (person: ChatContactUser) => void;
   customGroups?: ChatContactUser[];
+  roomsCount?: number;
+  onOpenRoomsTab?: () => void;
   onCreateGroupClick?: () => void;
   onAddFamilyMember?: (member: { name: string; relation: string; phone?: string }) => void;
 }
 
 export const HomeTab: React.FC<HomeTabProps> = ({
   family,
+  contacts = [],
   transmissions,
   onOpenChat,
   onSelectPerson,
   customGroups = [],
+  roomsCount = 0,
+  onOpenRoomsTab,
   onCreateGroupClick,
   onAddFamilyMember,
 }) => {
   const [globalQuery, setGlobalQuery] = useState('');
+  const [circleFilter, setCircleFilter] = useState<'all' | 'friends' | 'family' | 'groups'>('all');
   const [voiceSearching, setVoiceSearching] = useState(false);
   const [showAddFamily, setShowAddFamily] = useState(false);
   const [newFamName, setNewFamName] = useState('');
-  const [newFamRelation, setNewFamRelation] = useState('Family');
+  const [newFamRelation, setNewFamRelation] = useState('Friend');
   const [newFamPhone, setNewFamPhone] = useState('');
 
   const handleVoiceSearch = () => {
@@ -109,7 +118,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
     if (!newFamName.trim() || !onAddFamilyMember) return;
     onAddFamilyMember({
       name: newFamName.trim(),
-      relation: newFamRelation.trim() || 'Family',
+      relation: newFamRelation.trim() || 'Friend',
       phone: newFamPhone.trim() || undefined,
     });
     setNewFamName('');
@@ -119,14 +128,41 @@ export const HomeTab: React.FC<HomeTabProps> = ({
 
   const filteredFamily = useMemo(() => {
     const q = globalQuery.trim().toLowerCase();
-    if (!q) return family;
-    return family.filter(
-      (f) =>
+    return family.filter((f) => {
+      if (circleFilter === 'groups') return false;
+      if (circleFilter === 'friends' && f.relation.toLowerCase() === 'family') return false;
+      if (circleFilter === 'family' && f.relation.toLowerCase() !== 'family') return false;
+      if (!q) return true;
+      return (
         f.name.toLowerCase().includes(q) ||
         f.status.toLowerCase().includes(q) ||
         f.relation.toLowerCase().includes(q)
+      );
+    });
+  }, [family, globalQuery, circleFilter]);
+
+  const connectedFriends = useMemo(() => {
+    const q = globalQuery.trim().toLowerCase();
+    return contacts.filter((c) => {
+      if (!c.connected) return false;
+      if (circleFilter === 'family' || circleFilter === 'groups') return false;
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        c.phonebookLabel.toLowerCase().includes(q)
+      );
+    });
+  }, [contacts, globalQuery, circleFilter]);
+
+  const filteredGroups = useMemo(() => {
+    const q = globalQuery.trim().toLowerCase();
+    if (circleFilter === 'friends' || circleFilter === 'family') return [];
+    if (!q) return customGroups;
+    return customGroups.filter(
+      (g) => g.name.toLowerCase().includes(q) || (g.status || '').toLowerCase().includes(q)
     );
-  }, [family, globalQuery]);
+  }, [customGroups, globalQuery, circleFilter]);
 
   const filteredTransmissions = useMemo(() => {
     const q = globalQuery.trim().toLowerCase();
@@ -148,7 +184,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
           type="text"
           value={globalQuery}
           onChange={(e) => setGlobalQuery(e.target.value)}
-          placeholder="Search family, chats, hops, or voice-search..."
+          placeholder="Search friends, family, groups, chats, or voice-search..."
           className="flex-1 min-w-0 min-h-[40px] bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
         />
         {globalQuery && (
@@ -178,18 +214,18 @@ export const HomeTab: React.FC<HomeTabProps> = ({
         </button>
       </div>
 
-      {/* 2. Pinned Family Avatars & Custom Groups */}
+      {/* 2. Friends, Family & Chat Groups */}
       <section className="vaak-surface rounded-2xl p-3.5 sm:p-5 space-y-4 min-w-0 overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="min-w-0">
             <h1 className="font-display text-base sm:text-lg font-semibold text-white">
-              Pinned Family &amp; Team Groups
+              Friends, Family &amp; Chat Groups
             </h1>
             <p className="text-xs text-slate-400">
-              Pin trusted family members &amp; groups — saved in Firebase Firestore
+              Chat 1-on-1 with friends, family &amp; nearby peers, or start any group
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {onAddFamilyMember && (
               <button
                 type="button"
@@ -197,20 +233,53 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                 className="px-3 py-2 rounded-xl bg-[#0EA5E9]/20 hover:bg-[#0EA5E9]/30 border border-[#0EA5E9]/40 text-[#0EA5E9] text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Pin Family</span>
+                <span>Add Friend / Family</span>
               </button>
             )}
             {onCreateGroupClick && (
               <button
                 type="button"
                 onClick={onCreateGroupClick}
-                className="px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>New Group</span>
               </button>
             )}
+            {onOpenRoomsTab && (
+              <button
+                type="button"
+                onClick={onOpenRoomsTab}
+                className="px-3 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Hash className="w-3.5 h-3.5" />
+                <span>Group Rooms{roomsCount > 0 ? ` (${roomsCount})` : ''}</span>
+              </button>
+            )}
           </div>
+        </div>
+
+        {/* Category Filter Bar */}
+        <div className="grid grid-cols-4 gap-1 p-1 rounded-xl bg-[#121418] border border-white/8">
+          {[
+            { id: 'all' as const, label: 'All' },
+            { id: 'friends' as const, label: 'Friends' },
+            { id: 'family' as const, label: 'Family' },
+            { id: 'groups' as const, label: 'Groups' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setCircleFilter(tab.id)}
+              className={`min-h-[34px] rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                circleFilter === tab.id
+                  ? 'bg-[#0EA5E9] text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {showAddFamily && onAddFamilyMember && (
@@ -224,37 +293,42 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               maxLength={100}
               value={newFamName}
               onChange={(e) => setNewFamName(e.target.value)}
-              placeholder="Name *"
+              placeholder="Friend or Family Name *"
               className="min-h-[40px] px-3 rounded-xl bg-[#1B1E24] border border-white/10 text-xs text-white focus:outline-none focus:border-[#0EA5E9]"
             />
-            <input
-              type="text"
-              maxLength={40}
+            <select
               value={newFamRelation}
               onChange={(e) => setNewFamRelation(e.target.value)}
-              placeholder="Relation (e.g. Parent)"
+              aria-label="Relationship category"
               className="min-h-[40px] px-3 rounded-xl bg-[#1B1E24] border border-white/10 text-xs text-white focus:outline-none focus:border-[#0EA5E9]"
-            />
+            >
+              <option value="Friend">Friend</option>
+              <option value="Family">Family</option>
+              <option value="Neighbor">Neighbor</option>
+              <option value="Work / Team">Work / Team</option>
+              <option value="Other">Other</option>
+            </select>
             <input
               type="tel"
               maxLength={40}
               value={newFamPhone}
               onChange={(e) => setNewFamPhone(e.target.value)}
-              placeholder="Phone (optional)"
+              placeholder="Phone / Call-Sign (optional)"
               className="min-h-[40px] px-3 rounded-xl bg-[#1B1E24] border border-white/10 text-xs text-white focus:outline-none focus:border-[#0EA5E9]"
             />
             <button
               type="submit"
               className="min-h-[40px] px-4 rounded-xl bg-[#0EA5E9] hover:bg-sky-400 text-white text-xs font-semibold cursor-pointer"
             >
-              Save Member
+              Save to Chat List
             </button>
           </form>
         )}
 
-        {customGroups.length > 0 && (
+        {/* Custom Groups List */}
+        {filteredGroups.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2 border-b border-white/8">
-            {customGroups.map((grp) => (
+            {filteredGroups.map((grp) => (
               <button
                 key={grp.id}
                 type="button"
@@ -275,21 +349,70 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                     {grp.status}
                   </p>
                 </div>
+                <MessageSquare className="w-4 h-4 text-emerald-400 shrink-0" />
               </button>
             ))}
           </div>
         )}
 
-        {filteredFamily.length === 0 ? (
-          <div className="p-6 rounded-2xl bg-[#121418]/75 border border-white/8 text-center space-y-2">
-            <p className="text-xs text-slate-300 font-medium">
-              No pinned family members yet.
+        {/* Connected Friends & Contacts (from Radar / Contacts) */}
+        {connectedFriends.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-400">
+              Connected Friends &amp; Nearby Peers ({connectedFriends.length})
             </p>
-            <p className="text-[11px] text-slate-500">
-              Tap &ldquo;Pin Family&rdquo; above to add real family members to your radar &amp; SOS alert circle.
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {connectedFriends.map((friend) => (
+                <button
+                  key={friend.id}
+                  type="button"
+                  onClick={() => {
+                    audioEngine.playSonarPing();
+                    onOpenChat({
+                      id: friend.id,
+                      name: friend.name,
+                      phone: friend.phone,
+                      status: `${friend.phonebookLabel} · ${friend.status}`,
+                    });
+                  }}
+                  className="p-3 rounded-2xl text-left transition-all cursor-pointer border bg-[#121820] border-sky-500/25 hover:border-sky-400/70 group flex items-center justify-between gap-2.5 min-w-0 w-full overflow-hidden"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="w-10 h-10 rounded-full bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300 font-bold text-sm shrink-0">
+                      {friend.name[0]?.toUpperCase() || 'F'}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-white truncate group-hover:text-sky-300">
+                        {friend.name}
+                      </p>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {friend.phonebookLabel} · {friend.status}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="w-8 h-8 rounded-full bg-[#00A884] text-white flex items-center justify-center shrink-0">
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Family & Saved People Grid */}
+        {filteredFamily.length === 0 && connectedFriends.length === 0 && filteredGroups.length === 0 ? (
+          <div className="p-5 rounded-2xl bg-[#121418]/75 border border-white/8 text-center space-y-2.5">
+            <p className="text-xs text-slate-200 font-medium">
+              {circleFilter === 'groups'
+                ? 'No custom groups created yet.'
+                : 'No friends, family, or groups in this view yet.'}
+            </p>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Tap &ldquo;Add Friend / Family&rdquo; to chat 1-on-1, tap &ldquo;New Group&rdquo; for any friend or team group, or open &ldquo;Group Rooms&rdquo; for 6-digit PIN rooms.
             </p>
           </div>
         ) : (
+          filteredFamily.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
             {filteredFamily.map((member) => {
               const statusColor =
@@ -310,7 +433,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                       name: member.name,
                       phone: member.phone || '',
                       avatar: member.avatar || undefined,
-                      status: member.status,
+                      status: `${member.relation} · ${member.status}`,
                     });
                   }}
                   className="p-2.5 sm:p-3 rounded-2xl text-left transition-all cursor-pointer border bg-[#121418]/75 border-white/6 hover:border-[#0EA5E9]/50 group min-w-0 w-full overflow-hidden"
@@ -342,8 +465,8 @@ export const HomeTab: React.FC<HomeTabProps> = ({
                       <p className="text-sm font-semibold text-white truncate group-hover:text-[#0EA5E9]">
                         {member.name.split(' ')[0]}
                       </p>
-                      <p className={`text-xs font-medium truncate ${statusColor}`}>
-                        {member.status}
+                      <p className={`text-[11px] font-medium truncate ${statusColor}`}>
+                        {member.relation} · {member.status}
                       </p>
                     </div>
                   </div>
@@ -358,6 +481,7 @@ export const HomeTab: React.FC<HomeTabProps> = ({
               );
             })}
           </div>
+          )
         )}
       </section>
 

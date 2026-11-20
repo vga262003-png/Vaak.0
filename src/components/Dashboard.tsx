@@ -89,6 +89,9 @@ interface DashboardProps {
   onUpdateFounderControl: (patch: Partial<FounderRootControlState>) => void;
   family: FamilyMember[];
   radarNodes: RadarNode[];
+  radarScanning?: boolean;
+  onRefreshRadarScan?: () => void;
+  onSendRadarConnectRequest?: (peer: RadarNode) => void;
   transmissions: WalkieTransmission[];
   rooms: ChatRoom[];
   notifications: NotificationItem[];
@@ -188,6 +191,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onUpdateFounderControl,
   family,
   radarNodes,
+  radarScanning,
+  onRefreshRadarScan,
+  onSendRadarConnectRequest,
   transmissions,
   rooms,
   notifications,
@@ -429,7 +435,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     subtitle: string;
     icon: React.ComponentType<{ className?: string }>;
   }[] = [
-    { id: 'home', label: t.tabHome, subtitle: 'Pinned family · Voice notes', icon: Home },
+    { id: 'home', label: t.tabHome, subtitle: 'Friends · Family · Groups · Voice notes', icon: Home },
     { id: 'walkie', label: t.tabWalkie, subtitle: 'PTT · Signal-Smart call', icon: Radio },
     { id: 'contacts', label: t.tabContacts, subtitle: 'Vaak filter · Invite · Social', icon: Users },
     { id: 'radar', label: t.tabRadar, subtitle: 'Compass · Directional radar', icon: Compass },
@@ -825,6 +831,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <HomeTab
                     mode={mode}
                     family={family}
+                    contacts={contacts}
                     transmissions={transmissions}
                     isSuspended={session.isSuspended}
                     onPingFamily={onPingFamily}
@@ -832,6 +839,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     onOpenChat={openChat}
                     onSelectPerson={openChat}
                     customGroups={customGroups}
+                    roomsCount={rooms.length}
+                    onOpenRoomsTab={() => setActiveTab('rooms')}
                     onCreateGroupClick={() => setCreateGroupModalOpen(true)}
                     onAddFamilyMember={onAddFamilyMember}
                   />
@@ -861,6 +870,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   country={session.country}
                   family={family}
                   radarNodes={radarNodes}
+                  radarScanning={radarScanning}
+                  onRefreshRadarScan={onRefreshRadarScan}
+                  connectRequests={connectRequests}
+                  onSendRadarConnectRequest={onSendRadarConnectRequest}
+                  onRespondConnectRequest={onRespondConnectRequest}
                   onPingFamily={onPingFamily}
                   onTriggerSos={onTriggerSos}
                   onCancelSos={onCancelSos}
@@ -886,6 +900,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <HomeTab
                   mode={mode}
                   family={family}
+                  contacts={contacts}
                   transmissions={transmissions}
                   isSuspended={session.isSuspended}
                   onPingFamily={onPingFamily}
@@ -893,6 +908,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   onOpenChat={openChat}
                   onSelectPerson={openChat}
                   customGroups={customGroups}
+                  roomsCount={rooms.length}
+                  onOpenRoomsTab={() => setActiveTab('rooms')}
                   onCreateGroupClick={() => setCreateGroupModalOpen(true)}
                   onAddFamilyMember={onAddFamilyMember}
                 />
@@ -937,6 +954,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   country={session.country}
                   family={family}
                   radarNodes={radarNodes}
+                  radarScanning={radarScanning}
+                  onRefreshRadarScan={onRefreshRadarScan}
+                  connectRequests={connectRequests}
+                  onSendRadarConnectRequest={onSendRadarConnectRequest}
+                  onRespondConnectRequest={onRespondConnectRequest}
                   onPingFamily={onPingFamily}
                   onTriggerSos={onTriggerSos}
                   onCancelSos={onCancelSos}
@@ -1018,6 +1040,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               {activeTab === 'settings' && (
                 <SettingsTab
+                  session={session}
                   language={language}
                   settings={settings}
                   onUpdateSettings={onUpdateSettings}

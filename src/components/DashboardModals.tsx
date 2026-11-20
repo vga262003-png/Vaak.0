@@ -581,7 +581,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!groupName.trim() || selectedIds.length === 0) return;
+    if (!groupName.trim()) return;
     onCreateGroup(groupName.trim(), selectedIds);
     setGroupName('');
     setSelectedIds([]);
@@ -594,7 +594,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
         <div className="flex items-center justify-between gap-2 min-w-0">
           <h2 className="font-display text-base sm:text-lg font-bold text-white flex items-center gap-2">
             <span className="w-8 h-8 rounded-xl bg-emerald-600/30 text-emerald-400 flex items-center justify-center font-bold">+</span>
-            <span>Create WhatsApp-Style Family / Team Group</span>
+            <span>Create Friends, Family or Any Group</span>
           </h2>
           <button
             type="button"
@@ -608,13 +608,13 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Group Name (e.g. &ldquo;Family Group&rdquo;, &ldquo;Emergency Response Team&rdquo;)
+              Group Name (e.g. &ldquo;Friends Circle&rdquo;, &ldquo;College Buddies&rdquo;, &ldquo;Family Group&rdquo;, &ldquo;Team&rdquo;)
             </label>
             <input
               type="text"
               value={groupName}
               onChange={(e) => setGroupName(e.target.value)}
-              placeholder="Enter group name..."
+              placeholder="Enter any group name..."
               className="w-full min-h-[44px] px-4 rounded-xl bg-[#121418] border border-white/10 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
               required
             />
@@ -687,7 +687,7 @@ export const CreateGroupModal: React.FC<CreateGroupModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={!groupName.trim() || selectedIds.length === 0}
+              disabled={!groupName.trim()}
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer transition-colors shadow"
             >
               Create Group Chat

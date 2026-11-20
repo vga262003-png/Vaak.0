@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Clock,
   Compass,
   Copy,
   Database,
@@ -16,16 +17,22 @@ import {
   Plus,
   QrCode,
   Radio,
+  RefreshCw,
   Send,
   ShieldCheck,
   Unlock,
+  UserCheck,
+  UserPlus,
+  Users,
   Watch,
+  X,
   Zap,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import {
   AppLanguage,
+  ConnectRequestLog,
   CountryOption,
   FamilyMember,
   RadarNode,
@@ -45,6 +52,11 @@ interface RadarFamilyTabProps {
   country: CountryOption;
   family: FamilyMember[];
   radarNodes: RadarNode[];
+  radarScanning?: boolean;
+  onRefreshRadarScan?: () => void;
+  connectRequests?: ConnectRequestLog[];
+  onSendRadarConnectRequest?: (peer: RadarNode) => void;
+  onRespondConnectRequest?: (reqId: string, accept: boolean) => void;
   onPingFamily: (memberId: string) => void;
   onTriggerSos: () => void;
   onCancelSos: () => void;
@@ -80,6 +92,11 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
   country,
   family,
   radarNodes,
+  radarScanning = false,
+  onRefreshRadarScan,
+  connectRequests = [],
+  onSendRadarConnectRequest,
+  onRespondConnectRequest,
   onPingFamily,
   onTriggerSos,
   onCancelSos,
@@ -152,6 +169,16 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
     [localTileCacheEnabled, cachedTileCount]
   );
 
+  const nearbyPeers = useMemo(
+    () => radarNodes.filter((n) => n.kind === 'peer'),
+    [radarNodes]
+  );
+
+  const pendingIncomingRequests = useMemo(
+    () => connectRequests.filter((r) => r.direction === 'incoming' && r.status === 'pending'),
+    [connectRequests]
+  );
+
   const selectedFamily = family.find((f) => f.id === selectedTargetId);
   const selectedNode = radarNodes.find((n) => n.id === selectedTargetId);
   const selectedTag = trackingTags.find((tag) => tag.id === selectedTargetId);
@@ -164,15 +191,22 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
         subtitle: `${selectedFamily.status} · ${selectedFamily.lastPingAgo}`,
         distanceKm: selectedFamily.distanceKm,
         bearingDeg: selectedFamily.bearingDeg,
+        isPeer: false as const,
+        peerNode: undefined,
       };
     }
     if (selectedNode) {
       return {
         id: selectedNode.id,
-        label: selectedNode.label,
-        subtitle: `${selectedNode.kind.toUpperCase()} · Signal ${selectedNode.signalStrength}%`,
+        label: selectedNode.callSign || selectedNode.label,
+        subtitle:
+          selectedNode.kind === 'peer'
+            ? `${selectedNode.statusText || 'Vaak Nearby'} · Signal ${selectedNode.signalStrength}%`
+            : `${selectedNode.kind.toUpperCase()} · Signal ${selectedNode.signalStrength}%`,
         distanceKm: selectedNode.distanceKm,
         bearingDeg: selectedNode.bearingDeg,
+        isPeer: selectedNode.kind === 'peer',
+        peerNode: selectedNode.kind === 'peer' ? selectedNode : undefined,
       };
     }
     if (selectedTag) {
@@ -182,6 +216,8 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
         subtitle: `${selectedTag.targetType} Beacon · Duty ${selectedTag.dutyCycleSec}s`,
         distanceKm: selectedTag.distanceKm,
         bearingDeg: selectedTag.bearingDeg,
+        isPeer: false as const,
+        peerNode: undefined,
       };
     }
     return null;
@@ -787,14 +823,15 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                 })),
                 ...radarNodes.map((n) => ({
                   id: n.id,
-                  label: n.label.split(' ')[0],
-                  fullName: n.label,
+                  label: (n.callSign || n.label).split(' ')[0],
+                  fullName: n.callSign || n.label,
                   distanceKm: n.distanceKm,
                   bearingDeg: n.bearingDeg,
                   kind: n.kind,
                   statusType: 'safe' as const,
                   avatar: undefined,
-                  status: `${n.kind.toUpperCase()} Node`,
+                  status: n.statusText || `${n.kind.toUpperCase()} Node`,
+                  peerNode: n.kind === 'peer' ? n : undefined,
                 })),
                 ...trackingTags
                   .filter((tag) => tag.active)
@@ -808,6 +845,7 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                     statusType: 'safe' as const,
                     avatar: undefined,
                     status: `${tag.targetType} Beacon`,
+                    peerNode: undefined,
                   })),
               ].map((blip) => {
                 const clampedDist = Math.min(blip.distanceKm, zoomKm);
@@ -817,6 +855,7 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                 const y = 50 + pctRadius * Math.sin(adjustedAngleRad);
                 const outOfRange = blip.distanceKm > zoomKm;
                 const isSelected = selectedTargetId === blip.id;
+                const peerReqStatus = 'peerNode' in blip ? blip.peerNode?.requestStatus : undefined;
 
                 return (
                   <div
@@ -842,6 +881,12 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                             ? blip.statusType === 'safe'
                               ? 'bg-emerald-400'
                               : 'bg-amber-400'
+                            : blip.kind === 'peer'
+                            ? peerReqStatus === 'accepted'
+                              ? 'bg-emerald-400'
+                              : peerReqStatus === 'incoming_pending'
+                              ? 'bg-amber-400 animate-pulse'
+                              : 'bg-sky-400 animate-pulse'
                             : blip.kind === 'rescue'
                             ? 'bg-[#F43F5E]'
                             : blip.kind === 'tag'
@@ -849,37 +894,81 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                             : 'bg-[#0EA5E9]'
                         } ${isSelected ? 'ring-4 ring-white/40' : ''}`}
                       />
-                      <span className="mt-0.5 px-1.5 py-0.5 rounded bg-[#090E17]/90 text-[10px] font-medium text-slate-100 whitespace-nowrap border border-slate-700/60">
+                      <span className="mt-0.5 px-1.5 py-0.5 rounded bg-[#090E17]/90 text-[10px] font-medium text-slate-100 whitespace-nowrap border border-slate-700/60 max-w-[90px] truncate">
                         {blip.label}
                       </span>
                     </button>
 
-                    {/* Floating mini-popup on selected dot with WhatsApp-style round green chat button */}
-                    {isSelected && onOpenChat && (
+                    {/* Floating mini-popup on selected dot: Send Request / Accept / Chat */}
+                    {isSelected && (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className="absolute bottom-full mb-1 z-40 px-2 py-1 rounded-xl bg-[#0B141A]/95 border border-emerald-500/70 shadow-2xl flex items-center gap-1.5 animate-fade-in pointer-events-auto shrink-0"
+                        className="absolute bottom-full mb-1 z-40 px-2 py-1 rounded-xl bg-[#0B141A]/95 border border-sky-400/60 shadow-2xl flex items-center gap-1.5 animate-fade-in pointer-events-auto shrink-0"
                       >
-                        <span className="text-[10px] font-bold text-white whitespace-nowrap">{blip.label}</span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            audioEngine.playSonarPing();
-                            onOpenChat({
-                              id: blip.id,
-                              name: blip.fullName || blip.label,
-                              phone: blip.kind === 'family' ? (family.find((f) => f.id === blip.id)?.phone || '') : 'Mesh Node',
-                              avatar: blip.avatar || undefined,
-                              status: blip.status || `${blip.distanceKm}km away`,
-                            });
-                          }}
-                          aria-label={`Chat with ${blip.label}`}
-                          title={`Open 1-on-1 Chat with ${blip.label}`}
-                          className="w-7 h-7 rounded-full bg-[#00A884] hover:bg-[#008f72] text-white flex items-center justify-center cursor-pointer shadow-md shadow-emerald-950/40 shrink-0 transition-transform active:scale-90"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                        </button>
+                        <span className="text-[10px] font-bold text-white whitespace-nowrap max-w-[80px] truncate">
+                          {blip.label}
+                        </span>
+                        {blip.kind === 'peer' && 'peerNode' in blip && blip.peerNode && peerReqStatus !== 'accepted' ? (
+                          peerReqStatus === 'incoming_pending' && blip.peerNode.incomingReqId && onRespondConnectRequest ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRespondConnectRequest(blip.peerNode!.incomingReqId!, true);
+                              }}
+                              title="Accept Connect Request"
+                              className="h-7 px-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>Accept</span>
+                            </button>
+                          ) : peerReqStatus === 'outgoing_pending' ? (
+                            <span className="h-6 px-2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold flex items-center gap-1 shrink-0">
+                              <Clock className="w-3 h-3" />
+                              <span>Sent</span>
+                            </span>
+                          ) : (
+                            onSendRadarConnectRequest && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSendRadarConnectRequest(blip.peerNode!);
+                                }}
+                                title={`Send Connect Request to ${blip.label}`}
+                                className="h-7 px-2 rounded-full bg-[#0EA5E9] hover:bg-sky-400 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                              >
+                                <UserPlus className="w-3 h-3" />
+                                <span>Request</span>
+                              </button>
+                            )
+                          )
+                        ) : (
+                          onOpenChat && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                audioEngine.playSonarPing();
+                                onOpenChat({
+                                  id: blip.id,
+                                  name: blip.fullName || blip.label,
+                                  phone:
+                                    blip.kind === 'family'
+                                      ? family.find((f) => f.id === blip.id)?.phone || ''
+                                      : 'Mesh Node',
+                                  avatar: blip.avatar || undefined,
+                                  status: blip.status || `${blip.distanceKm}km away`,
+                                });
+                              }}
+                              aria-label={`Chat with ${blip.label}`}
+                              title={`Open 1-on-1 Chat with ${blip.label}`}
+                              className="w-7 h-7 rounded-full bg-[#00A884] hover:bg-[#008f72] text-white flex items-center justify-center cursor-pointer shadow-md shadow-emerald-950/40 shrink-0 transition-transform active:scale-90"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
@@ -889,8 +978,8 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
 
             {/* Floating Mini-Card for Selected Target on 20km Radar */}
             {activeTarget && (
-              <div className="p-3 rounded-2xl bg-[#121820] border border-emerald-500/40 shadow-lg flex items-center justify-between gap-3 animate-fade-in">
-                <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-3 rounded-2xl bg-[#121820] border border-emerald-500/40 shadow-lg flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300 font-bold overflow-hidden shrink-0">
                     {selectedFamily?.avatar ? (
                       <img src={selectedFamily.avatar} alt={activeTarget.label} className="w-full h-full object-cover" />
@@ -898,39 +987,273 @@ export const RadarFamilyTab: React.FC<RadarFamilyTabProps> = ({
                       <span>{activeTarget.label[0]}</span>
                     )}
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <p className="text-xs sm:text-sm font-semibold text-white truncate">{activeTarget.label}</p>
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
                     </div>
                     <p className="text-[11px] font-mono-tabular text-emerald-400 truncate">
-                      {activeTarget.distanceKm} km · {activeTarget.subtitle}
+                      {activeTarget.distanceKm} km ({bearingToCardinal(activeTarget.bearingDeg)} {activeTarget.bearingDeg}°) · {activeTarget.subtitle}
                     </p>
                   </div>
                 </div>
 
-                {onOpenChat && (
+                <div className="flex items-center gap-2 shrink-0">
+                  {activeTarget.isPeer && activeTarget.peerNode && activeTarget.peerNode.requestStatus !== 'accepted' ? (
+                    activeTarget.peerNode.requestStatus === 'incoming_pending' &&
+                    activeTarget.peerNode.incomingReqId &&
+                    onRespondConnectRequest ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onRespondConnectRequest(activeTarget.peerNode!.incomingReqId!, true)}
+                          className="min-h-[34px] px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Accept</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRespondConnectRequest(activeTarget.peerNode!.incomingReqId!, false)}
+                          className="min-h-[34px] px-2.5 rounded-xl bg-white/5 hover:bg-rose-500/20 text-slate-300 hover:text-rose-200 border border-white/10 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Decline</span>
+                        </button>
+                      </>
+                    ) : activeTarget.peerNode.requestStatus === 'outgoing_pending' ? (
+                      <span className="min-h-[34px] px-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Request Sent</span>
+                      </span>
+                    ) : (
+                      onSendRadarConnectRequest && (
+                        <button
+                          type="button"
+                          onClick={() => onSendRadarConnectRequest(activeTarget.peerNode!)}
+                          className="min-h-[36px] px-3.5 rounded-xl bg-[#0EA5E9] hover:bg-sky-400 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Send Request</span>
+                        </button>
+                      )
+                    )
+                  ) : (
+                    onOpenChat && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          audioEngine.playSonarPing();
+                          onOpenChat({
+                            id: activeTarget.id,
+                            name: activeTarget.label,
+                            phone: selectedFamily?.phone || activeTarget.peerNode?.nodeId || 'Mesh Radar Node',
+                            avatar: selectedFamily?.avatar || undefined,
+                            status: activeTarget.subtitle,
+                          });
+                        }}
+                        aria-label={`Chat with ${activeTarget.label}`}
+                        title={`Open 1-on-1 Chat with ${activeTarget.label}`}
+                        className="w-9 h-9 rounded-full bg-[#00A884] hover:bg-[#008f72] text-white flex items-center justify-center cursor-pointer shadow-md shadow-emerald-950/40 shrink-0 transition-transform active:scale-95"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Nearby Vaak People Discovery & Mutual Connect Requests Panel */}
+            <div className="rounded-2xl bg-[#121418] border border-[#0EA5E9]/30 p-3.5 sm:p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0 flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-[#0EA5E9]/15 border border-[#0EA5E9]/40 flex items-center justify-center text-[#0EA5E9] shrink-0">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-semibold text-white flex items-center gap-1.5">
+                      <span className="truncate">Nearby People on Radar</span>
+                      <span className="px-1.5 py-0.5 rounded-md bg-[#0EA5E9]/20 text-[#0EA5E9] font-mono-tabular text-[10px]">
+                        {nearbyPeers.length}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-400 truncate">
+                      Discover active Vaak users within {zoomKm}km &amp; send connect requests
+                    </p>
+                  </div>
+                </div>
+
+                {onRefreshRadarScan && (
                   <button
                     type="button"
-                    onClick={() => {
-                      audioEngine.playSonarPing();
-                      onOpenChat({
-                        id: activeTarget.id,
-                        name: activeTarget.label,
-                        phone: selectedFamily?.phone || 'Mesh Radar Node',
-                        avatar: selectedFamily?.avatar || undefined,
-                        status: activeTarget.subtitle,
-                      });
-                    }}
-                    aria-label={`Chat with ${activeTarget.label}`}
-                    title={`Open 1-on-1 Chat with ${activeTarget.label}`}
-                    className="w-9 h-9 rounded-full bg-[#00A884] hover:bg-[#008f72] text-white flex items-center justify-center cursor-pointer shadow-md shadow-emerald-950/40 shrink-0 transition-transform active:scale-95"
+                    onClick={onRefreshRadarScan}
+                    className="min-h-[34px] px-3 rounded-xl bg-[#1B1E24] hover:bg-[#232730] border border-white/10 text-xs font-semibold text-[#0EA5E9] flex items-center gap-1.5 cursor-pointer shrink-0"
                   >
-                    <MessageSquare className="w-4 h-4" />
+                    <RefreshCw className={`w-3.5 h-3.5 ${radarScanning ? 'animate-spin' : ''}`} />
+                    <span>{radarScanning ? 'Scanning...' : 'Scan Now'}</span>
                   </button>
                 )}
               </div>
-            )}
+
+              {pendingIncomingRequests.length > 0 && (
+                <div className="space-y-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/35">
+                  <p className="text-[11px] font-semibold text-amber-300 uppercase tracking-wide">
+                    Incoming Connect Requests ({pendingIncomingRequests.length})
+                  </p>
+                  {pendingIncomingRequests.map((req) => (
+                    <div
+                      key={req.id}
+                      className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl bg-[#0B1118] border border-white/10"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-white truncate">{req.contactName}</p>
+                        <p className="text-[10px] font-mono-tabular text-slate-400 truncate">
+                          {req.phone} · {req.timestamp}
+                        </p>
+                      </div>
+                      {onRespondConnectRequest && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => onRespondConnectRequest(req.id, true)}
+                            className="min-h-[32px] px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Accept</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRespondConnectRequest(req.id, false)}
+                            className="min-h-[32px] px-2 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-300 hover:text-rose-200 border border-white/10 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                            <span>Decline</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {nearbyPeers.length === 0 ? (
+                <div className="p-3 rounded-xl bg-[#0D1117] border border-white/8 text-xs text-slate-400 space-y-1">
+                  <p className="text-slate-200 font-medium">
+                    Scanning 20km radius for nearby Vaak users...
+                  </p>
+                  <p className="text-[11px] leading-relaxed">
+                    When another Vaak user opens the app online (or in another tab on this device), their dot will appear on the radar so you can send a Connect Request. Note: 2-phone offline Zero-Internet discovery requires the native Android APK radio.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5">
+                  {nearbyPeers.map((peer) => {
+                    const isSelected = selectedTargetId === peer.id;
+                    const reqStatus = peer.requestStatus || 'none';
+                    return (
+                      <div
+                        key={peer.id}
+                        onClick={() => {
+                          audioEngine.playSonarPing();
+                          setSelectedTargetId(peer.id);
+                        }}
+                        className={`p-2.5 rounded-xl border transition-colors flex flex-wrap items-center justify-between gap-2 cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#0EA5E9]/15 border-[#0EA5E9]/60'
+                            : 'bg-[#0D1117] border-white/8 hover:border-white/20'
+                        }`}
+                      >
+                        <div className="min-w-0 flex items-center gap-2.5 flex-1">
+                          <div className="w-8 h-8 rounded-full bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300 text-xs font-bold shrink-0">
+                            {(peer.callSign || peer.label)[0]?.toUpperCase() || 'V'}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-semibold text-white truncate">
+                                {peer.callSign || peer.label}
+                              </p>
+                              <span className="px-1.5 py-0.5 rounded bg-white/5 text-[9px] font-mono-tabular text-sky-300 uppercase shrink-0">
+                                {peer.mode || 'mesh'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] font-mono-tabular text-slate-400 truncate">
+                              {peer.distanceKm} km ({bearingToCardinal(peer.bearingDeg)} {peer.bearingDeg}°)
+                              {peer.gpsExact ? ' · GPS' : ' · Sector'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div
+                          className="flex items-center gap-1.5 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {reqStatus === 'accepted' ? (
+                            <>
+                              <span className="px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-[10px] font-semibold flex items-center gap-1">
+                                <UserCheck className="w-3 h-3" />
+                                <span>Connected</span>
+                              </span>
+                              {onOpenChat && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onOpenChat({
+                                      id: peer.id,
+                                      name: peer.callSign || peer.label,
+                                      phone: peer.nodeId || 'Vaak Radar',
+                                      status: `${peer.distanceKm} km away`,
+                                    })
+                                  }
+                                  className="min-h-[32px] px-2.5 rounded-lg bg-[#00A884] hover:bg-[#008f72] text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <MessageSquare className="w-3 h-3" />
+                                  <span>Chat</span>
+                                </button>
+                              )}
+                            </>
+                          ) : reqStatus === 'incoming_pending' && peer.incomingReqId && onRespondConnectRequest ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onRespondConnectRequest(peer.incomingReqId!, true)}
+                                className="min-h-[32px] px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>Accept</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onRespondConnectRequest(peer.incomingReqId!, false)}
+                                className="min-h-[32px] px-2 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-300 border border-white/10 text-[11px] font-semibold cursor-pointer"
+                              >
+                                Decline
+                              </button>
+                            </>
+                          ) : reqStatus === 'outgoing_pending' ? (
+                            <span className="min-h-[32px] px-2.5 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-300 text-[11px] font-semibold flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              <span>Request Sent</span>
+                            </span>
+                          ) : (
+                            onSendRadarConnectRequest && (
+                              <button
+                                type="button"
+                                onClick={() => onSendRadarConnectRequest(peer)}
+                                className="min-h-[32px] px-3 rounded-lg bg-[#0EA5E9] hover:bg-sky-400 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                              >
+                                <UserPlus className="w-3 h-3" />
+                                <span>Send Request</span>
+                              </button>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* Expandable Directional Compass Drawer */}
             <div className="rounded-2xl bg-[#121418] border border-white/10 overflow-hidden">

@@ -96,6 +96,92 @@ export function subscribeLocalMesh(
   }
 }
 
+const LOCAL_RADAR_PRESENCE_CHANNEL = 'vaak-local-radar-presence-v1';
+const LOCAL_RADAR_REQUEST_CHANNEL = 'vaak-local-radar-requests-v1';
+
+export interface LocalRadarBeacon {
+  nodeId: string;
+  callSign: string;
+  mode: 'online' | 'mesh' | 'sonic';
+  lat: number | null;
+  lng: number | null;
+  statusText: string;
+  updatedAtMs: number;
+}
+
+export interface LocalRadarRequestPacket {
+  kind: 'request' | 'response';
+  requestId: string;
+  fromNodeId: string;
+  fromCallSign: string;
+  toNodeId: string;
+  toCallSign: string;
+  status: 'pending' | 'accepted' | 'declined';
+  timestampMs: number;
+}
+
+export function broadcastLocalRadarBeacon(beacon: LocalRadarBeacon): boolean {
+  if (typeof BroadcastChannel === 'undefined') return false;
+  try {
+    const ch = new BroadcastChannel(LOCAL_RADAR_PRESENCE_CHANNEL);
+    ch.postMessage(beacon);
+    ch.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function subscribeLocalRadarBeacons(
+  selfNodeId: string,
+  onBeacon: (beacon: LocalRadarBeacon) => void
+): () => void {
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  try {
+    const ch = new BroadcastChannel(LOCAL_RADAR_PRESENCE_CHANNEL);
+    ch.onmessage = (ev) => {
+      const beacon = ev.data as LocalRadarBeacon | undefined;
+      if (beacon && beacon.nodeId && beacon.nodeId !== selfNodeId && beacon.callSign) {
+        onBeacon(beacon);
+      }
+    };
+    return () => ch.close();
+  } catch {
+    return () => {};
+  }
+}
+
+export function broadcastLocalRadarRequest(packet: LocalRadarRequestPacket): boolean {
+  if (typeof BroadcastChannel === 'undefined') return false;
+  try {
+    const ch = new BroadcastChannel(LOCAL_RADAR_REQUEST_CHANNEL);
+    ch.postMessage(packet);
+    ch.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function subscribeLocalRadarRequests(
+  selfNodeId: string,
+  onPacket: (packet: LocalRadarRequestPacket) => void
+): () => void {
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  try {
+    const ch = new BroadcastChannel(LOCAL_RADAR_REQUEST_CHANNEL);
+    ch.onmessage = (ev) => {
+      const pkt = ev.data as LocalRadarRequestPacket | undefined;
+      if (pkt && pkt.requestId && (pkt.toNodeId === selfNodeId || pkt.fromNodeId === selfNodeId)) {
+        onPacket(pkt);
+      }
+    };
+    return () => ch.close();
+  } catch {
+    return () => {};
+  }
+}
+
 // Zero-Server WebRTC DataChannel P2P Bridge (Manual Offer/Answer SDP exchange for offline Wi-Fi Direct / Hotspot)
 export class WebRtcMeshBridge {
   private pc: RTCPeerConnection | null = null;

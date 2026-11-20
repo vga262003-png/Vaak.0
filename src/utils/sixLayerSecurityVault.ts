@@ -329,6 +329,7 @@ export interface FounderFeatureFlags {
   enableExtendedHardwareLoRaMesh: boolean; // default false (dormant)
   enableGovVaultAndWhiteLabel: boolean; // default false (dormant)
   isSubscriptionActive: boolean; // default false (dormant)
+  enablePhoneOtpAuth: boolean; // default false (dormant optional SMS OTP)
 }
 
 export const DORMANT_FOUNDER_FLAGS: FounderFeatureFlags = {
@@ -336,6 +337,7 @@ export const DORMANT_FOUNDER_FLAGS: FounderFeatureFlags = {
   enableExtendedHardwareLoRaMesh: false,
   enableGovVaultAndWhiteLabel: false,
   isSubscriptionActive: false,
+  enablePhoneOtpAuth: false,
 };
 
 const FOUNDER_FLAGS_STORAGE_KEY = 'vaak_founder_feature_flags_v1';
@@ -355,7 +357,7 @@ export function saveFounderFeatureFlags(flags: FounderFeatureFlags): void {
 }
 
 /**
- * Server-verified Founder Authentication Key check (constant-time server validation)
+ * Server-verified Founder Authentication Key check (strict constant-time server validation)
  */
 export async function verifyFounderAuthKeyServer(founderKey: string): Promise<{
   authorized: boolean;
@@ -374,11 +376,9 @@ export async function verifyFounderAuthKeyServer(founderKey: string): Promise<{
     }
     return { authorized: false, error: data.error || 'Server rejected Founder Auth Key.' };
   } catch {
-    // If backend route is temporarily unreachable, fallback to secure hash check
-    const cleanKey = founderKey.trim();
-    if (cleanKey === 'FOUNDER-SEAL-991' || cleanKey.startsWith('FOUNDER-')) {
-      return { authorized: true, founderAccountId: 'FOUNDER-ROOT-001' };
-    }
-    return { authorized: false, error: 'Founder Authorization Key rejected.' };
+    return {
+      authorized: false,
+      error: 'Founder verification requires an active connection to the verification server.',
+    };
   }
 }

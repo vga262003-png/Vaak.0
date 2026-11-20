@@ -131,6 +131,360 @@ async function startServer() {
     });
   });
 
+  // 2c. Founder Feature Flags (Phone OTP kept optional/dormant false until Founder activates)
+  let serverFounderFlags = {
+    enableGlobalWorldMapAndHubs: false,
+    enableExtendedHardwareLoRaMesh: false,
+    enableGovVaultAndWhiteLabel: false,
+    isSubscriptionActive: false,
+    enablePhoneOtpAuth: false,
+  };
+
+  app.get('/api/founder/flags', (_req, res) => {
+    return res.json(serverFounderFlags);
+  });
+
+  app.post('/api/founder/flags', (req, res) => {
+    const { founderKey, flags } = req.body || {};
+    if (typeof founderKey !== 'string' || !constantTimeEquals(founderKey.trim(), FOUNDER_AUTH_KEY)) {
+      return res.status(403).json({ authorized: false, error: 'Invalid Founder Authorization Key.' });
+    }
+    if (flags && typeof flags === 'object') {
+      serverFounderFlags = {
+        enableGlobalWorldMapAndHubs: Boolean(flags.enableGlobalWorldMapAndHubs),
+        enableExtendedHardwareLoRaMesh: Boolean(flags.enableExtendedHardwareLoRaMesh),
+        enableGovVaultAndWhiteLabel: Boolean(flags.enableGovVaultAndWhiteLabel),
+        isSubscriptionActive: Boolean(flags.isSubscriptionActive),
+        enablePhoneOtpAuth: Boolean(flags.enablePhoneOtpAuth),
+      };
+    }
+    return res.json({ authorized: true, flags: serverFounderFlags });
+  });
+
+  // 2d. Encrypted Cross-Device Login ID Handle Registry (stores PBKDF2+AES-GCM sealed ciphertext only, zero plaintext PII)
+  const handlesFilePath = path.resolve(process.cwd(), '.vaak-sealed-handles.json');
+  const sealedHandleMap = new Map<string, { iv: string; sealedEmail: string; updatedAt: string }>();
+  try {
+    if (fs.existsSync(handlesFilePath)) {
+      const raw = JSON.parse(fs.readFileSync(handlesFilePath, 'utf8')) as Record<
+        string,
+        { iv: string; sealedEmail: string; updatedAt: string }
+      >;
+      Object.entries(raw).forEach(([k, v]) => {
+        if (/^[a-f0-9]{64}$/.test(k) && v?.iv && v?.sealedEmail) {
+          sealedHandleMap.set(k, v);
+        }
+      });
+    }
+  } catch {
+    // Non-fatal if persistence file unreadable
+  }
+
+  app.post('/api/auth/handle-register', (req, res) => {
+    const { handleHash, iv, sealedEmail } = req.body || {};
+    if (
+      typeof handleHash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(handleHash) ||
+      typeof iv !== 'string' ||
+      iv.length < 8 ||
+      iv.length > 64 ||
+      typeof sealedEmail !== 'string' ||
+      sealedEmail.length < 8 ||
+      sealedEmail.length > 1024
+    ) {
+      return res.status(400).json({ ok: false, error: 'Malformed sealed login handle payload.' });
+    }
+
+    const record = { iv, sealedEmail, updatedAt: new Date().toISOString() };
+    sealedHandleMap.set(handleHash, record);
+    try {
+      const obj = Object.fromEntries(sealedHandleMap.entries());
+      fs.writeFileSync(handlesFilePath, JSON.stringify(obj), 'utf8');
+    } catch {
+      // In-memory store remains valid if read-only container
+    }
+    return res.json({ ok: true });
+  });
+
+  app.post('/api/auth/handle-resolve', (req, res) => {
+    const { handleHash } = req.body || {};
+    if (typeof handleHash !== 'string' || !/^[a-f0-9]{64}$/.test(handleHash)) {
+      return res.status(400).json({ found: false });
+    }
+    const found = sealedHandleMap.get(handleHash);
+    if (!found) {
+      return res.status(404).json({ found: false });
+    }
+    return res.json({ found: true, iv: found.iv, sealedEmail: found.sealedEmail });
+  });
+
+  // 2e. Real-Time Nearby Radar Presence & Zero-PII Peer Connect Request Relay
+  interface RadarBeaconRecord {
+    nodeId: string;
+    callSign: string;
+    mode: 'online' | 'mesh' | 'sonic';
+    lat: number | null;
+    lng: number | null;
+    statusText: string;
+    updatedAtMs: number;
+  }
+
+  interface RadarPeerRequestRecord {
+    id: string;
+    fromNodeId: string;
+    fromCallSign: string;
+    toNodeId: string;
+    toCallSign: string;
+    note: string;
+    status: 'pending' | 'accepted' | 'declined';
+    createdAtIso: string;
+    updatedAtMs: number;
+  }
+
+  const RADAR_BEACON_TTL_MS = 5 * 60 * 1000;
+  const RADAR_REQUEST_TTL_MS = 30 * 60 * 1000;
+  const radarBeacons = new Map<string, RadarBeaconRecord>();
+  const radarPeerRequests = new Map<string, RadarPeerRequestRecord>();
+
+  function cleanExpiredRadarData(nowMs: number) {
+    for (const [key, beacon] of radarBeacons.entries()) {
+      if (nowMs - beacon.updatedAtMs > RADAR_BEACON_TTL_MS) {
+        radarBeacons.delete(key);
+      }
+    }
+    for (const [key, reqRec] of radarPeerRequests.entries()) {
+      if (nowMs - reqRec.updatedAtMs > RADAR_REQUEST_TTL_MS) {
+        radarPeerRequests.delete(key);
+      }
+    }
+  }
+
+  function haversineDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c * 100) / 100;
+  }
+
+  function computeBearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const dLambda = ((lng2 - lng1) * Math.PI) / 180;
+    const y = Math.sin(dLambda) * Math.cos(phi2);
+    const x =
+      Math.cos(phi1) * Math.sin(phi2) -
+      Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+    const deg = (Math.atan2(y, x) * 180) / Math.PI;
+    return Math.round((deg + 360) % 360);
+  }
+
+  function fallbackSectorForNode(nodeId: string): { distanceKm: number; bearingDeg: number } {
+    const digest = crypto.createHash('sha256').update(nodeId).digest();
+    const dist = 0.6 + ((digest[0] % 85) / 10); // 0.6 km .. 9.0 km
+    const bearing = Math.round(((digest[1] * 256 + digest[2]) % 360));
+    return {
+      distanceKm: Math.round(dist * 10) / 10,
+      bearingDeg: bearing,
+    };
+  }
+
+  app.post('/api/radar/announce', (req, res) => {
+    const { nodeId, callSign, mode, lat, lng, statusText } = req.body || {};
+    if (
+      typeof nodeId !== 'string' ||
+      !/^[A-Za-z0-9_-]{3,64}$/.test(nodeId.trim()) ||
+      typeof callSign !== 'string' ||
+      !callSign.trim()
+    ) {
+      return res.status(400).json({ ok: false, error: 'Valid nodeId and callSign required.' });
+    }
+
+    const nowMs = Date.now();
+    cleanExpiredRadarData(nowMs);
+
+    const safeMode: 'online' | 'mesh' | 'sonic' =
+      mode === 'online' || mode === 'sonic' ? mode : 'mesh';
+    const validLat = typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90 ? lat : null;
+    const validLng = typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180 ? lng : null;
+
+    radarBeacons.set(nodeId.trim(), {
+      nodeId: nodeId.trim(),
+      callSign: callSign.trim().slice(0, 40),
+      mode: safeMode,
+      lat: validLat,
+      lng: validLng,
+      statusText: typeof statusText === 'string' ? statusText.trim().slice(0, 60) : 'Active on Vaak',
+      updatedAtMs: nowMs,
+    });
+
+    return res.json({ ok: true, activeBeacons: radarBeacons.size });
+  });
+
+  app.get('/api/radar/nearby', (req, res) => {
+    const selfId = String(req.query.selfId || '').trim();
+    const selfLatRaw = Number(req.query.lat);
+    const selfLngRaw = Number(req.query.lng);
+    const maxKm = Math.min(100, Math.max(1, Number(req.query.maxKm) || 20));
+    const hasSelfGps =
+      Number.isFinite(selfLatRaw) &&
+      Number.isFinite(selfLngRaw) &&
+      Math.abs(selfLatRaw) <= 90 &&
+      Math.abs(selfLngRaw) <= 180 &&
+      !(selfLatRaw === 0 && selfLngRaw === 0);
+
+    const nowMs = Date.now();
+    cleanExpiredRadarData(nowMs);
+
+    const peers: {
+      nodeId: string;
+      callSign: string;
+      mode: 'online' | 'mesh' | 'sonic';
+      distanceKm: number;
+      bearingDeg: number;
+      signalStrength: number;
+      lastSeenSecAgo: number;
+      statusText: string;
+      gpsExact: boolean;
+    }[] = [];
+
+    for (const beacon of radarBeacons.values()) {
+      if (beacon.nodeId === selfId) continue;
+
+      let distanceKm: number;
+      let bearingDeg: number;
+      let gpsExact = false;
+
+      if (hasSelfGps && beacon.lat !== null && beacon.lng !== null) {
+        distanceKm = Math.max(0.05, haversineDistanceKm(selfLatRaw, selfLngRaw, beacon.lat, beacon.lng));
+        bearingDeg = computeBearingDeg(selfLatRaw, selfLngRaw, beacon.lat, beacon.lng);
+        gpsExact = true;
+      } else {
+        const fb = fallbackSectorForNode(beacon.nodeId);
+        distanceKm = fb.distanceKm;
+        bearingDeg = fb.bearingDeg;
+      }
+
+      if (distanceKm <= maxKm) {
+        const signalStrength = Math.max(25, Math.min(99, Math.round(100 - distanceKm * 3.5)));
+        peers.push({
+          nodeId: beacon.nodeId,
+          callSign: beacon.callSign,
+          mode: beacon.mode,
+          distanceKm,
+          bearingDeg,
+          signalStrength,
+          lastSeenSecAgo: Math.max(0, Math.round((nowMs - beacon.updatedAtMs) / 1000)),
+          statusText: beacon.statusText,
+          gpsExact,
+        });
+      }
+    }
+
+    peers.sort((a, b) => a.distanceKm - b.distanceKm);
+    return res.json({ peers, totalScanned: radarBeacons.size });
+  });
+
+  app.post('/api/radar/request', (req, res) => {
+    const { fromNodeId, fromCallSign, toNodeId, toCallSign, note } = req.body || {};
+    if (
+      typeof fromNodeId !== 'string' ||
+      !/^[A-Za-z0-9_-]{3,64}$/.test(fromNodeId.trim()) ||
+      typeof toNodeId !== 'string' ||
+      !/^[A-Za-z0-9_-]{3,64}$/.test(toNodeId.trim()) ||
+      fromNodeId.trim() === toNodeId.trim()
+    ) {
+      return res.status(400).json({ ok: false, error: 'Valid distinct sender and recipient nodeIds required.' });
+    }
+
+    const nowMs = Date.now();
+    cleanExpiredRadarData(nowMs);
+
+    const safeFrom = fromNodeId.trim();
+    const safeTo = toNodeId.trim();
+
+    for (const existing of radarPeerRequests.values()) {
+      if (
+        existing.fromNodeId === safeFrom &&
+        existing.toNodeId === safeTo &&
+        existing.status !== 'declined'
+      ) {
+        existing.updatedAtMs = nowMs;
+        return res.json({ ok: true, request: existing });
+      }
+    }
+
+    const reqId = `rreq-${crypto.randomBytes(6).toString('hex')}`;
+    const record: RadarPeerRequestRecord = {
+      id: reqId,
+      fromNodeId: safeFrom,
+      fromCallSign:
+        typeof fromCallSign === 'string' && fromCallSign.trim()
+          ? fromCallSign.trim().slice(0, 40)
+          : safeFrom,
+      toNodeId: safeTo,
+      toCallSign:
+        typeof toCallSign === 'string' && toCallSign.trim()
+          ? toCallSign.trim().slice(0, 40)
+          : safeTo,
+      note: typeof note === 'string' ? note.trim().slice(0, 120) : 'Nearby Vaak Radar Connect Request',
+      status: 'pending',
+      createdAtIso: new Date(nowMs).toISOString(),
+      updatedAtMs: nowMs,
+    };
+
+    radarPeerRequests.set(reqId, record);
+    return res.json({ ok: true, request: record });
+  });
+
+  app.get('/api/radar/requests', (req, res) => {
+    const nodeId = String(req.query.nodeId || '').trim();
+    if (!/^[A-Za-z0-9_-]{3,64}$/.test(nodeId)) {
+      return res.json({ incoming: [], outgoing: [] });
+    }
+
+    const nowMs = Date.now();
+    cleanExpiredRadarData(nowMs);
+
+    const incoming: RadarPeerRequestRecord[] = [];
+    const outgoing: RadarPeerRequestRecord[] = [];
+
+    for (const rec of radarPeerRequests.values()) {
+      if (rec.toNodeId === nodeId) incoming.push(rec);
+      else if (rec.fromNodeId === nodeId) outgoing.push(rec);
+    }
+
+    incoming.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+    outgoing.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+
+    return res.json({ incoming, outgoing });
+  });
+
+  app.post('/api/radar/request/respond', (req, res) => {
+    const { requestId, responderNodeId, accept } = req.body || {};
+    if (typeof requestId !== 'string' || typeof responderNodeId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'requestId and responderNodeId required.' });
+    }
+
+    const rec = radarPeerRequests.get(requestId.trim());
+    if (!rec) {
+      return res.status(404).json({ ok: false, error: 'Radar request expired or not found.' });
+    }
+    if (rec.toNodeId !== responderNodeId.trim()) {
+      return res.status(403).json({ ok: false, error: 'Only the target node can respond to this request.' });
+    }
+
+    rec.status = accept ? 'accepted' : 'declined';
+    rec.updatedAtMs = Date.now();
+    return res.json({ ok: true, request: rec });
+  });
+
   // 3. Auto-Updating RASP Threat Policy & Signature Sync Endpoint
   app.get('/api/security/policy-sync', (_req, res) => {
     const policyHash = crypto

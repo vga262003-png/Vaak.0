@@ -11,6 +11,7 @@ import {
   Key,
   Layers,
   Lock,
+  Phone,
   Radio,
   Server,
   Shield,
@@ -20,7 +21,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { FounderFeatureFlags, FounderRootControlState } from '../types/app';
-import { verifyFounderAuthKeyServer } from '../utils/sixLayerSecurityVault';
+import { saveFounderFeatureFlags, verifyFounderAuthKeyServer } from '../utils/sixLayerSecurityVault';
 import { audioEngine } from '../utils/audioEngine';
 import { SonicShieldLogo } from './SonicShieldLogo';
 
@@ -71,6 +72,22 @@ export const FounderControlSwitchboard: React.FC<FounderControlSwitchboardProps>
   const handleToggleFlag = (flag: keyof FounderFeatureFlags) => {
     const nextVal = !founderControl[flag];
     audioEngine.playSonarPing();
+    const nextFlags: FounderFeatureFlags = {
+      enableGlobalWorldMapAndHubs: founderControl.enableGlobalWorldMapAndHubs,
+      enableExtendedHardwareLoRaMesh: founderControl.enableExtendedHardwareLoRaMesh,
+      enableGovVaultAndWhiteLabel: founderControl.enableGovVaultAndWhiteLabel,
+      isSubscriptionActive: founderControl.isSubscriptionActive,
+      enablePhoneOtpAuth: founderControl.enablePhoneOtpAuth,
+      [flag]: nextVal,
+    };
+    saveFounderFeatureFlags(nextFlags);
+    if (inputKey.trim()) {
+      void fetch('/api/founder/flags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ founderKey: inputKey.trim(), flags: nextFlags }),
+      }).catch(() => {});
+    }
     onUpdateFounderControl({
       [flag]: nextVal,
       adminAlerts: [
@@ -354,6 +371,40 @@ export const FounderControlSwitchboard: React.FC<FounderControlSwitchboardProps>
                         }`}
                       >
                         {founderControl.isSubscriptionActive ? 'ACTIVE' : 'DORMANT'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Flag 5: Phone SMS OTP Auth (Optional Dormant until revenue) */}
+                  <div
+                    className={`sm:col-span-2 p-4 rounded-2xl border transition-all ${
+                      founderControl.enablePhoneOtpAuth
+                        ? 'bg-emerald-950/20 border-emerald-500/40'
+                        : 'bg-[#141A24] border-amber-500/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span className="text-xs font-bold text-white">
+                            Optional Phone Number SMS OTP Login (Pay-Per-SMS Control)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Keep DORMANT (₹0 SMS cost) while users verify free via Email &amp; ID/Password. Switch ON later when revenue funds SMS OTP.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFlag('enablePhoneOtpAuth')}
+                        className={`min-h-[32px] px-3 rounded-xl text-xs font-bold cursor-pointer transition-colors shrink-0 ${
+                          founderControl.enablePhoneOtpAuth
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-800 text-amber-300 hover:text-white'
+                        }`}
+                      >
+                        {founderControl.enablePhoneOtpAuth ? 'ACTIVE' : 'PAUSED (₹0)'}
                       </button>
                     </div>
                   </div>

@@ -7,7 +7,9 @@ import {
   Database,
   Download,
   ExternalLink,
+  Fingerprint,
   HardDriveDownload,
+  KeyRound,
   Lock,
   Moon,
   Palette,
@@ -27,6 +29,7 @@ import {
   FontSizeOption,
   FontStyleOption,
   FounderRootControlState,
+  UserSession,
 } from '../../types/app';
 import { getTranslation } from '../../data/i18n';
 import { ACCENT_PRESETS } from '../../data/themePresets';
@@ -36,9 +39,19 @@ import {
   RaspIntegrityReport,
   RaspPolicyConfig,
 } from '../../utils/raspShield';
+import {
+  clearOfflineVault,
+  enrollBiometricInVault,
+  isBiometricHardwareAvailable,
+  loadOfflineVault,
+  removeBiometricInVault,
+  removeOfflinePinInVault,
+  setOfflinePinInVault,
+} from '../../utils/authVault';
 import { SecurityProtocolLab } from '../SecurityProtocolLab';
 
 interface SettingsTabProps {
+  session?: UserSession;
   language: AppLanguage;
   settings: AppSettings;
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
@@ -73,6 +86,7 @@ interface SettingsTabProps {
 }
 
 export const SettingsTab: React.FC<SettingsTabProps> = ({
+  session,
   language,
   settings,
   onUpdateSettings,
@@ -107,6 +121,60 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 }) => {
   const t = getTranslation(language);
 
+  const [vaultState, setVaultState] = React.useState(() => loadOfflineVault());
+  const [pinDraft, setPinDraft] = React.useState('');
+  const [pinStatusMsg, setPinStatusMsg] = React.useState<string | null>(null);
+  const [bioMsg, setBioMsg] = React.useState<string | null>(null);
+  const [bioBusy, setBioBusy] = React.useState(false);
+  const [bioHw, setBioHw] = React.useState<{ supported: boolean; inIframe: boolean }>({
+    supported: false,
+    inIframe: false,
+  });
+
+  React.useEffect(() => {
+    void isBiometricHardwareAvailable().then(setBioHw);
+  }, []);
+
+  const handleSaveOfflinePin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinStatusMsg(null);
+    const cleaned = pinDraft.replace(/\D/g, '');
+    if (cleaned.length < 4 || cleaned.length > 6) {
+      setPinStatusMsg('PIN must be 4 to 6 numeric digits.');
+      return;
+    }
+    const updated = await setOfflinePinInVault(
+      cleaned,
+      session ? { session, loginId: session.loginId } : undefined
+    );
+    if (updated) {
+      setVaultState(updated);
+      setPinDraft('');
+      setPinStatusMsg('Offline Quick-Unlock PIN saved! Works even without SIM or internet.');
+    } else {
+      setPinStatusMsg('Sign in online once first before setting an Offline PIN.');
+    }
+  };
+
+  const handleEnableBiometric = async () => {
+    if (bioBusy) return;
+    setBioMsg(null);
+    setBioBusy(true);
+    try {
+      const res = await enrollBiometricInVault(
+        session ? { session, loginId: session.loginId } : undefined
+      );
+      if (res.ok && res.vault) {
+        setVaultState(res.vault);
+        setBioMsg('Fingerprint / Face ID enrolled on this device!');
+      } else {
+        setBioMsg(res.error || 'Could not enable Biometric unlock.');
+      }
+    } finally {
+      setBioBusy(false);
+    }
+  };
+
   const fontStyles: { id: FontStyleOption; label: string; sample: string }[] = [
     { id: 'sans', label: 'Modern Sans', sample: 'Plus Jakarta / DM Sans' },
     { id: 'serif', label: 'Editorial Serif', sample: 'Lora High-Contrast' },
@@ -122,6 +190,150 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   return (
     <div className="w-full max-w-full overflow-x-hidden box-border space-y-6">
+      {/* Offline Quick-Unlock PIN, Biometric & Account Identity Card */}
+      <section className="vaak-surface rounded-2xl p-4 sm:p-6 space-y-4 border border-emerald-500/35 min-w-0 w-full overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-display text-base sm:text-lg font-semibold text-white flex items-center gap-2">
+              <Fingerprint className="w-5 h-5 text-emerald-400 shrink-0" />
+              <span>Login ID, Biometric &amp; Offline PIN Lock</span>
+            </h2>
+            <p className="text-xs text-slate-400 break-words">
+              {session?.loginId ? `Login ID: ${session.loginId} · ` : ''}
+              {session?.email || session?.identifier || 'Verified Account'} — Set a PIN or Fingerprint/Face ID to unlock offline with zero SIM.
+            </p>
+          </div>
+          {session?.isOfflineUnlocked && (
+            <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/35 text-[11px] font-semibold text-amber-300 shrink-0">
+              Offline Unlocked
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Offline Quick PIN Setup */}
+          <form
+            onSubmit={handleSaveOfflinePin}
+            className="p-4 rounded-xl bg-[#121418] border border-white/10 space-y-3 min-w-0"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <KeyRound className="w-4 h-4 text-[#0EA5E9] shrink-0" />
+                <span>Offline Quick-Unlock PIN (4–6 Digits)</span>
+              </span>
+              <span
+                className={`text-[11px] font-mono-tabular ${
+                  vaultState?.pinHash ? 'text-emerald-400' : 'text-slate-400'
+                }`}
+              >
+                {vaultState?.pinHash ? 'PIN SET' : 'NOT SET'}
+              </span>
+            </div>
+            <div className="flex flex-wrap sm:flex-nowrap gap-2 min-w-0">
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                value={pinDraft}
+                onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ''))}
+                placeholder={vaultState?.pinHash ? 'New 4–6 digit PIN' : 'Set 4–6 digit PIN'}
+                className="flex-1 min-w-0 min-h-[42px] px-3 rounded-xl bg-[#0B1120] border border-white/10 font-mono-tabular text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-[#0EA5E9]"
+              />
+              <button
+                type="submit"
+                className="min-h-[42px] px-4 rounded-xl bg-[#0EA5E9] hover:bg-sky-400 text-white text-xs font-semibold cursor-pointer shrink-0"
+              >
+                {vaultState?.pinHash ? 'Update PIN' : 'Save PIN'}
+              </button>
+            </div>
+            {vaultState?.pinHash && (
+              <button
+                type="button"
+                onClick={() => {
+                  setVaultState(removeOfflinePinInVault());
+                  setPinStatusMsg('Offline PIN removed from this device.');
+                }}
+                className="text-[11px] text-rose-400 hover:underline cursor-pointer"
+              >
+                Remove Offline PIN
+              </button>
+            )}
+            {pinStatusMsg && (
+              <p className="text-[11px] text-emerald-300 break-words">{pinStatusMsg}</p>
+            )}
+          </form>
+
+          {/* Biometric Fingerprint / Face ID Setup */}
+          <div className="p-4 rounded-xl bg-[#121418] border border-white/10 space-y-3 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <Fingerprint className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Fingerprint / Face ID (Biometric)</span>
+              </span>
+              <span
+                className={`text-[11px] font-mono-tabular ${
+                  vaultState?.biometricCredentialId ? 'text-emerald-400' : 'text-slate-400'
+                }`}
+              >
+                {vaultState?.biometricCredentialId ? 'ACTIVE' : 'OFF'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed break-words">
+              {bioHw.inIframe
+                ? 'Embedded preview frame blocks OS Biometric prompts. Open Vaak in a full browser tab / installed PWA on HTTPS to register Fingerprint or Face ID.'
+                : bioHw.supported
+                ? 'Device biometric sensor ready. Register once to unlock Vaak offline & online with 1 touch.'
+                : 'Uses your device platform biometric sensor when running on a supported mobile browser / PWA.'}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={bioBusy}
+                onClick={handleEnableBiometric}
+                className="min-h-[40px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Fingerprint className="w-4 h-4 shrink-0" />
+                <span>
+                  {bioBusy
+                    ? 'Waiting for Sensor...'
+                    : vaultState?.biometricCredentialId
+                    ? 'Re-Register Biometric'
+                    : 'Enable Fingerprint / Face ID'}
+                </span>
+              </button>
+              {vaultState?.biometricCredentialId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVaultState(removeBiometricInVault());
+                    setBioMsg('Biometric unlock removed from this device.');
+                  }}
+                  className="min-h-[40px] px-3 rounded-xl bg-[#232730] hover:bg-slate-700 text-xs text-rose-300 font-semibold cursor-pointer"
+                >
+                  Disable
+                </button>
+              )}
+              {vaultState && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearOfflineVault();
+                    setVaultState(null);
+                    setBioMsg('Saved PIN & Biometric wiped from this device.');
+                  }}
+                  className="min-h-[40px] px-3 rounded-xl bg-[#232730] hover:bg-slate-700 text-xs text-slate-300 font-semibold cursor-pointer"
+                >
+                  Forget Device
+                </button>
+              )}
+            </div>
+            {bioMsg && (
+              <p className="text-[11px] text-sky-300 break-words">{bioMsg}</p>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* Security Shield & Antivirus Status Card (RASP) */}
       <section className="vaak-surface rounded-2xl p-5 sm:p-6 space-y-5 border border-blue-500/35">
         <div className="flex flex-wrap items-center justify-between gap-3">
